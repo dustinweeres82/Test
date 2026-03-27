@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dragon &amp; Pup: Light Chase</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #06061a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: white;
+      user-select: none;
+    }
+    #canvas {
+      border: 2px solid #7c3aed;
+      border-radius: 10px;
+      box-shadow: 0 0 40px rgba(124,58,237,0.6), 0 0 80px rgba(59,130,246,0.3);
+    }
+    #controls {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #666;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+<canvas id="canvas" width="800" height="560"></canvas>
+<div id="controls">ARROW KEYS / WASD: Move &nbsp;|&nbsp; SPACE / F: Shoot Fire &nbsp;|&nbsp; R: Restart</div>
+
+<script>
+const W = 800, H = 560;
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let state = 'title';   // title | playing | gameover
+let score = 0;
+let wave  = 1;
+let invTimer = 0;
+
+// ─── Entities ────────────────────────────────────────────────────────────────
+const dragon = { x:400, y:300, w:64, h:48, speed:4, health:3, maxHealth:3,
+                 fireCd:0, wingA:0, wingDir:1, tailA:0 };
+
+const pup = { x:180, y:160, vx:2.2, vy:1.6, beamCd:0, beamRate:130,
+              glowT:0, stunT:0 };
+
+let gems      = [];
+let beams     = [];
+let fireballs = [];
+let particles = [];
+
+// ─── Background stars ─────────────────────────────────────────────────────────
+const STARS = Array.from({length:110}, () => ({
+  x: Math.random()*W, y: Math.random()*H,
+  r: Math.random()*1.4 + 0.3,
+  phase: Math.random()*Math.PI*2
+}));
+
+// ─── Input ───────────────────────────────────────────────────────────────────
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === ' ') e.preventDefault();
+  if ((e.key === ' ' || e.key === 'Enter') && state === 'title')    { startGame(); }
+  if ((e.key === ' ' || e.key === 'Enter') && state === 'gameover') { startGame(); }
+  if ((e.key === 'r' || e.key === 'R') && state !== 'title')        { startGame(); }
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+const dist    = (x1,y1,x2,y2) => Math.hypot(x2-x1, y2-y1);
+const clamp   = (v,lo,hi)     => Math.max(lo, Math.min(hi, v));
+const inBounds = (x,y,pad=25) => x>-pad && x<W+pad && y>-pad && y<H+pad;
+const t       = () => Date.now();
+
+function spawnParticles(x, y, color, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random()*Math.PI*2, spd = 1.5 + Math.random()*4;
+    particles.push({ x, y, vx:Math.cos(a)*spd, vy:Math.sin(a)*spd,
+                     r: 2+Math.random()*4, color, life:25+Math.random()*20, max:45 });
+  }
+}
+
+function spawnGems(n) {
+  for (let i = 0; i < n; i++) {
+    gems.push({
+      x: 90 + Math.random()*(W-180),
+      y: 80 + Math.random()*(H-160),
+      r: 10, pulse: Math.random()*Math.PI*2,
+      color: Math.random()>0.5 ? '#a855f7' : '#06b6d4'
+    });
+  }
+}
+
+function startGame() {
+  Object.assign(dragon, { x:400, y:280, health:3, fireCd:0, wingA:0, wingDir:1 });
+  Object.assign(pup,    { x:160, y:160, vx:2.2, vy:1.6, beamCd:0, beamRate:130, glowT:0, stunT:0 });
+  score=0; wave=1; invTimer=0;
+  gems=[]; beams=[]; fireballs=[]; particles=[];
+  spawnGems(5);
+  state='playing';
+}
+
+// ─── Update ──────────────────────────────────────────────────────────────────
+function update() {
+  const now = t();
+
+  // --- Dragon movement ---
+  let dx=0, dy=0;
+  if (keys['ArrowLeft']  || keys['a'] || keys['A']) dx=-1;
+  if (keys['ArrowRight'] || keys['d'] || keys['D']) dx= 1;
+  if (keys['ArrowUp']    || keys['w'] || keys['W']) dy=-1;
+  if (keys['ArrowDown']  || keys['s'] || keys['S']) dy= 1;
+  if (dx && dy) { dx*=0.707; dy*=0.707; }
+
+  dragon.x = clamp(dragon.x + dx*dragon.speed, dragon.w/2, W-dragon.w/2);
+  dragon.y = clamp(dragon.y + dy*dragon.speed, dragon.h/2, H-dragon.h/2);
+
+  // Wing flap animation
+  dragon.wingA += 0.13 * dragon.wingDir;
+  if (Math.abs(dragon.wingA) > 0.38) dragon.wingDir *= -1;
+  dragon.tailA = Math.sin(now/280) * 0.28;
+
+  // --- Dragon fire ---
+  if (dragon.fireCd > 0) dragon.fireCd--;
+  if ((keys[' '] || keys['f'] || keys['F']) && dragon.fireCd === 0) {
+    const a = (dx||dy) ? Math.atan2(dy,dx) : Math.atan2(pup.y-dragon.y, pup.x-dragon.x);
+    fireballs.push({ x:dragon.x+Math.cos(a)*32, y:dragon.y+Math.sin(a)*32,
+                     vx:Math.cos(a)*9, vy:Math.sin(a)*9, r:9, life:55 });
+    dragon.fireCd = 18;
+  }
+
+  // --- Fireballs ---
+  fireballs = fireballs.filter(f => {
+    f.x+=f.vx; f.y+=f.vy; f.life--;
+    // Hit pup
+    if (!pup.stunT && dist(f.x,f.y,pup.x,pup.y) < 36+f.r) {
+      pup.stunT = 100;
+      spawnParticles(pup.x, pup.y, '#93c5fd', 18);
+      score += 5;
+      return false;
+    }
+    return f.life > 0 && inBounds(f.x, f.y);
+  });
+
+  // --- Pup AI ---
+  pup.glowT += 0.09;
+  if (pup.stunT > 0) {
+    pup.stunT--;
+  } else {
+    pup.x += pup.vx; pup.y += pup.vy;
+    if (pup.x < 38 || pup.x > W-38) { pup.vx *= -1; pup.x = clamp(pup.x,38,W-38); }
+    if (pup.y < 38 || pup.y > H-38) { pup.vy *= -1; pup.y = clamp(pup.y,38,H-38); }
+
+    pup.beamCd--;
+    if (pup.beamCd <= 0) {
+      const aimA = Math.atan2(dragon.y-pup.y, dragon.x-pup.x);
+      const count = Math.min(1 + Math.floor((wave-1)/2), 5);
+      const spread = Math.PI/9;
+      for (let i=0; i<count; i++) {
+        const a = aimA + (i-(count-1)/2)*spread;
+        beams.push({ x:pup.x+Math.cos(a)*38, y:pup.y+Math.sin(a)*38,
+                     vx:Math.cos(a)*5.5, vy:Math.sin(a)*5.5, r:7, life:115 });
+      }
+      pup.beamCd = pup.beamRate;
+    }
+  }
+
+  // --- Beams ---
+  beams = beams.filter(b => {
+    b.x+=b.vx; b.y+=b.vy; b.life--;
+    // Fireballs cancel beams
+    let killed = false;
+    fireballs = fireballs.filter(f => {
+      if (dist(b.x,b.y,f.x,f.y) < b.r+f.r) {
+        spawnParticles(f.x,f.y,'#fb923c',8);
+        killed = true; return false;
+      }
+      return true;
+    });
+    if (killed) return false;
+    // Hit dragon
+    if (invTimer===0 && dist(b.x,b.y,dragon.x,dragon.y) < b.r+20) {
+      dragon.health--;
+      invTimer = 110;
+      spawnParticles(dragon.x,dragon.y,'#ef4444',14);
+      if (dragon.health<=0) state='gameover';
+      return false;
+    }
+    return b.life>0 && inBounds(b.x,b.y);
+  });
+
+  if (invTimer>0) invTimer--;
+
+  // --- Gems ---
+  gems = gems.filter(g => {
+    g.pulse += 0.055;
+    if (dist(dragon.x,dragon.y,g.x,g.y) < 28+g.r) {
+      score += 10;
+      spawnParticles(g.x,g.y,g.color,12);
+      return false;
+    }
+    return true;
+  });
+
+  // Next wave
+  if (gems.length===0) {
+    wave++;
+    pup.beamRate = Math.max(38, 130 - wave*12);
+    const spd = Math.hypot(pup.vx,pup.vy);
+    const ang  = Math.atan2(pup.vy,pup.vx);
+    const ns   = Math.min(spd*1.12, 6);
+    pup.vx = Math.cos(ang)*ns; pup.vy = Math.sin(ang)*ns;
+    spawnGems(5+wave);
+  }
+
+  // --- Particles ---
+  particles = particles.filter(p => {
+    p.x+=p.vx; p.y+=p.vy; p.vx*=0.94; p.vy*=0.94; p.r*=0.94; p.life--;
+    return p.life>0;
+  });
+}
+
+// ─── Draw helpers ─────────────────────────────────────────────────────────────
+function glow(color, blur) { ctx.shadowColor=color; ctx.shadowBlur=blur; }
+function noGlow()           { ctx.shadowBlur=0; }
+
+function drawStars() {
+  const now = t();
+  STARS.forEach(s => {
+    const b = 0.2 + 0.8 * (0.5 + 0.5*Math.sin(now/900 + s.phase));
+    ctx.fillStyle = `rgba(255,255,255,${b})`;
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2); ctx.fill();
+  });
+}
+
+// ─── Dragon Drawing ───────────────────────────────────────────────────────────
+function drawDragon() {
+  const { x, y, wingA, tailA } = dragon;
+  ctx.save(); ctx.translate(x,y);
+
+  // --- Wings ---
+  const wc = '#111827', ws = '#1e3a5f';
+  function wing(side) {
+    ctx.save();
+    ctx.rotate(side * wingA);
+    ctx.fillStyle = wc; ctx.strokeStyle = ws; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(side*5, -4);
+    ctx.bezierCurveTo(side*40, -28-wingA*35, side*72, -16, side*62, 12);
+    ctx.bezierCurveTo(side*44, 22, side*22, 12, side*5, 6);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    // Wing membrane lines
+    ctx.strokeStyle='rgba(30,58,95,0.6)'; ctx.lineWidth=0.8;
+    for (let i=1;i<=3;i++) {
+      ctx.beginPath();
+      ctx.moveTo(side*5, -4+i*2);
+      ctx.bezierCurveTo(side*(20+i*8), -20+i*5, side*(50+i*5), -5+i*3, side*(58-i*4), 10+i*2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  wing(-1); wing(1);
+
+  // --- Body ---
+  ctx.fillStyle='#111827'; ctx.strokeStyle='#1f2937'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.ellipse(0,5,23,15,0,0,Math.PI*2); ctx.fill(); ctx.stroke();
+
+  // --- Tail ---
+  ctx.save(); ctx.rotate(tailA);
+  ctx.fillStyle='#111827';
+  ctx.beginPath();
+  ctx.moveTo(-18,8);
+  ctx.bezierCurveTo(-38,18,-52,8,-48,-4);
+  ctx.bezierCurveTo(-42,-12,-28,-6,-18,6);
+  ctx.closePath(); ctx.fill();
+  // Tail fin
+  ctx.fillStyle='#1e3a5f';
+  ctx.beginPath();
+  ctx.moveTo(-46,-1); ctx.lineTo(-58,-16); ctx.lineTo(-50,2); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // --- Dorsal spines ---
+  ctx.fillStyle='#1f2937';
+  [[10,-10,6,-20],[-2,-12,-6,-23],[-13,-9,-16,-19]].forEach(([bx,by,tx,ty]) => {
+    ctx.beginPath(); ctx.moveTo(bx,by); ctx.lineTo(tx,ty); ctx.lineTo(bx-4,by); ctx.closePath(); ctx.fill();
+  });
+
+  // --- Head ---
+  ctx.fillStyle='#1f2937'; ctx.strokeStyle='#374151'; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.ellipse(22,-5,15,10,-0.15,0,Math.PI*2); ctx.fill(); ctx.stroke();
+
+  // Head horns
+  ctx.fillStyle='#374151';
+  ctx.beginPath(); ctx.moveTo(16,-13); ctx.lineTo(14,-24); ctx.lineTo(12,-13); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(24,-13); ctx.lineTo(22,-22); ctx.lineTo(20,-13); ctx.closePath(); ctx.fill();
+
+  // --- Eyes (glowing green - Toothless!) ---
+  const eyePulse = 0.6 + 0.4*Math.sin(t()/400);
+  glow('#4ade80', 14*eyePulse);
+  ctx.fillStyle='#4ade80';
+  ctx.beginPath(); ctx.ellipse(26,-7,5.5,4.5,0,0,Math.PI*2); ctx.fill();
+  noGlow();
+  ctx.fillStyle='#111';
+  ctx.beginPath(); ctx.ellipse(27,-7,2.8,3.5,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.9)';
+  ctx.beginPath(); ctx.arc(25,-9,1.2,0,Math.PI*2); ctx.fill();
+
+  // Fire breath hint (nostril glow when firing)
+  if (dragon.fireCd > 12) {
+    glow('#f97316', 12);
+    ctx.fillStyle='rgba(251,146,60,0.8)';
+    ctx.beginPath(); ctx.ellipse(36,-4,4,3,0,0,Math.PI*2); ctx.fill();
+    noGlow();
+  }
+
+  noGlow();
+  ctx.restore();
+}
+
+// ─── Pup Drawing ──────────────────────────────────────────────────────────────
+function drawPup() {
+  const { x, y, stunT, glowT } = pup;
+  ctx.save(); ctx.translate(x,y);
+
+  const stunned = stunT > 0;
+  const gp = 0.55 + 0.45*Math.sin(glowT*2);  // glow pulse
+
+  // Stun stars
+  if (stunned) {
+    ctx.font='16px Arial';
+    for (let i=0;i<3;i++) {
+      const a = t()/250 + i*Math.PI*2/3;
+      ctx.fillStyle='#fbbf24';
+      glow('#fbbf24',10); ctx.fillText('★', Math.cos(a)*46, Math.sin(a)*40-5);
+    }
+    noGlow();
+  }
+
+  // --- Ears (dark purple) ---
+  ctx.fillStyle = stunned ? '#6b7280' : '#6d28d9';
+  ctx.beginPath(); ctx.ellipse(-19,-23,10,15,-0.25,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 19,-23,10,15, 0.25,0,Math.PI*2); ctx.fill();
+
+  // --- Body ---
+  ctx.fillStyle = stunned ? '#9ca3af' : '#c4b5fd';
+  ctx.strokeStyle = '#7c3aed'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.ellipse(0,4,29,25,0,0,Math.PI*2); ctx.fill(); ctx.stroke();
+
+  // --- White face area ---
+  ctx.fillStyle='#f5f0ff';
+  ctx.beginPath(); ctx.ellipse(0,-1,18,21,0,0,Math.PI*2); ctx.fill();
+
+  // --- Eyes (big, colorful like the toy) ---
+  // Whites
+  glow('#38bdf8', stunned ? 0 : 10*gp);
+  ctx.fillStyle='white';
+  ctx.beginPath(); ctx.ellipse(-9,-6,9.5,11,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 9,-6,9.5,11,0,0,Math.PI*2); ctx.fill();
+
+  // Iris (teal)
+  ctx.fillStyle='#0e7490';
+  ctx.beginPath(); ctx.ellipse(-9,-6,7.5,9,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 9,-6,7.5,9,0,0,Math.PI*2); ctx.fill();
+
+  // Rainbow shimmer (tiny dots in iris)
+  ['#f87171','#fb923c','#facc15','#4ade80','#60a5fa','#c084fc'].forEach((c,i) => {
+    const a = i*Math.PI/3 + t()/800;
+    ctx.fillStyle=c; ctx.globalAlpha=0.55;
+    ctx.beginPath(); ctx.arc(-9+Math.cos(a)*4,-6+Math.sin(a)*4,1.5,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc( 9+Math.cos(a)*4,-6+Math.sin(a)*4,1.5,0,Math.PI*2); ctx.fill();
+  });
+  ctx.globalAlpha=1;
+
+  // Pupils
+  noGlow();
+  ctx.fillStyle='#0c0c0c';
+  ctx.beginPath(); ctx.ellipse(-9,-6,3.5,5,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 9,-6,3.5,5,0,0,Math.PI*2); ctx.fill();
+
+  // Eye shine
+  ctx.fillStyle='white';
+  ctx.beginPath(); ctx.arc(-12,-10,2.2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(  6,-10,2.2,0,Math.PI*2); ctx.fill();
+
+  // --- Nose (pink) ---
+  ctx.fillStyle='#f472b6'; ctx.strokeStyle='#be185d'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.ellipse(0,10,7,4.5,0,0,Math.PI*2); ctx.fill(); ctx.stroke();
+
+  // --- Blush marks ---
+  ctx.fillStyle='rgba(251,182,206,0.5)';
+  ctx.beginPath(); ctx.ellipse(-14,5,6,4,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( 14,5,6,4,0,0,Math.PI*2); ctx.fill();
+
+  // --- Glowing blue paw circles (like the toy!) ---
+  const bcolor = stunned ? '#6b7280' : `rgba(59,130,246,${0.7+gp*0.3})`;
+  glow('#3b82f6', stunned ? 0 : 18*gp);
+  ctx.fillStyle=bcolor; ctx.strokeStyle='#bfdbfe'; ctx.lineWidth=2;
+
+  ctx.beginPath(); ctx.arc(-23,20,13,0,Math.PI*2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc( 23,20,13,0,Math.PI*2); ctx.fill(); ctx.stroke();
+
+  // Inner light (heart-ish)
+  if (!stunned) {
+    ctx.fillStyle=`rgba(147,197,253,${gp*0.9})`;
+    ctx.shadowBlur=6;
+    ctx.beginPath(); ctx.arc(-23,20,7,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc( 23,20,7,0,Math.PI*2); ctx.fill();
+  }
+
+  noGlow();
+  ctx.restore();
+}
+
+// ─── Projectile Drawing ───────────────────────────────────────────────────────
+function drawBeam(b) {
+  const alpha = b.life/115;
+  glow('#3b82f6', 18);
+  ctx.fillStyle=`rgba(96,165,250,${alpha})`;
+  ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=`rgba(219,234,254,${alpha*0.85})`;
+  ctx.beginPath(); ctx.arc(b.x,b.y,b.r*0.45,0,Math.PI*2); ctx.fill();
+  noGlow();
+}
+
+function drawFireball(f) {
+  const alpha = f.life/55;
+  glow('#f97316', 22);
+  ctx.fillStyle=`rgba(251,146,60,${alpha})`;
+  ctx.beginPath(); ctx.arc(f.x,f.y,f.r,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=`rgba(253,224,71,${alpha})`;
+  ctx.beginPath(); ctx.arc(f.x,f.y,f.r*0.5,0,Math.PI*2); ctx.fill();
+  noGlow();
+}
+
+function drawGem(g) {
+  const pulse = 0.65 + 0.35*Math.sin(g.pulse);
+  ctx.save(); ctx.translate(g.x,g.y); ctx.rotate(g.pulse*0.4);
+  glow(g.color, 16*pulse);
+  ctx.fillStyle=g.color; ctx.strokeStyle='rgba(255,255,255,0.7)'; ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(0,-g.r); ctx.lineTo(g.r*0.7,0); ctx.lineTo(0,g.r); ctx.lineTo(-g.r*0.7,0);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  noGlow();
+  ctx.restore();
+}
+
+// ─── Screen Drawing ───────────────────────────────────────────────────────────
+function drawHUD() {
+  // Score / wave
+  ctx.textAlign='left'; ctx.font='bold 19px Courier New';
+  glow('#a855f7',8); ctx.fillStyle='#c084fc';
+  ctx.fillText(`Score: ${score}`, 14, 30);
+  ctx.fillText(`Wave:  ${wave}`,  14, 54);
+  noGlow();
+
+  // Hearts
+  ctx.textAlign='right'; ctx.font='20px Arial';
+  let hearts = '';
+  for (let i=0;i<dragon.maxHealth;i++) hearts += i<dragon.health ? '❤️' : '🖤';
+  ctx.fillText(hearts, W-12, 30);
+
+  // Gems left
+  ctx.textAlign='center'; ctx.font='15px Courier New';
+  glow('#06b6d4',5); ctx.fillStyle='#67e8f9';
+  ctx.fillText(`♦ ${gems.length} gem${gems.length!==1?'s':''} left`, W/2, 24);
+  noGlow();
+
+  // Hint
+  if (wave===1 && score<20) {
+    ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.font='13px Courier New'; ctx.textAlign='center';
+    ctx.fillText('Collect gems! Space to shoot fire at the pup!', W/2, H-8);
+  }
+}
+
+function drawTitle() {
+  ctx.textAlign='center';
+
+  // Title text
+  glow('#a855f7',25); ctx.fillStyle='#c084fc'; ctx.font='bold 54px Courier New';
+  ctx.fillText('DRAGON & PUP', W/2, 130);
+  noGlow();
+
+  glow('#3b82f6',15); ctx.fillStyle='#60a5fa'; ctx.font='bold 26px Courier New';
+  ctx.fillText('LIGHT CHASE', W/2, 175);
+  noGlow();
+
+  // Animated preview characters
+  dragon.x=220; dragon.y=310;
+  dragon.wingA  = Math.sin(t()/350)*0.35;
+  dragon.tailA  = Math.sin(t()/280)*0.28;
+  dragon.fireCd = 0;
+  drawDragon();
+
+  pup.x=580; pup.y=310; pup.stunT=0;
+  pup.glowT = t()/100;
+  drawPup();
+
+  // VS text
+  ctx.font='bold 30px Courier New'; glow('#ffffff',10); ctx.fillStyle='white';
+  ctx.fillText('VS', W/2, 320); noGlow();
+
+  // Instructions
+  ctx.fillStyle='#9ca3af'; ctx.font='15px Courier New';
+  ctx.fillText('Collect glowing gems  ♦  Dodge blue light beams', W/2, 400);
+  ctx.fillText('Shoot fire at the pup to stun it!', W/2, 426);
+
+  // Prompt
+  const blink = Math.sin(t()/400) > 0;
+  if (blink) {
+    glow('#c084fc',12); ctx.fillStyle='#e9d5ff'; ctx.font='bold 21px Courier New';
+    ctx.fillText('Press SPACE or ENTER to Play!', W/2, 490); noGlow();
+  }
+}
+
+function drawGameOver() {
+  ctx.textAlign='center';
+  glow('#ef4444',25); ctx.fillStyle='#fca5a5'; ctx.font='bold 54px Courier New';
+  ctx.fillText('GAME OVER', W/2, 190); noGlow();
+
+  ctx.fillStyle='#c084fc'; ctx.font='bold 30px Courier New';
+  ctx.fillText(`Score: ${score}`, W/2, 270);
+  ctx.fillText(`Wave Reached: ${wave}`, W/2, 312);
+
+  let rank = score>=500?'🐉 Dragon Master!':score>=250?'⚡ Adventurer':score>=100?'🌟 Brave Pup Dodger':'🐾 Keep Trying!';
+  ctx.fillStyle='#fcd34d'; ctx.font='bold 22px Courier New';
+  ctx.fillText(rank, W/2, 360);
+
+  ctx.fillStyle='#6b7280'; ctx.font='16px Courier New';
+  ctx.fillText('Press SPACE or R to play again', W/2, 430);
+}
+
+// ─── Game Loop ────────────────────────────────────────────────────────────────
+function loop() {
+  // Background
+  ctx.fillStyle='#06061a'; ctx.fillRect(0,0,W,H);
+  drawStars();
+
+  if (state==='title') {
+    drawTitle();
+  } else if (state==='playing') {
+    update();
+    gems.forEach(drawGem);
+    beams.forEach(drawBeam);
+    fireballs.forEach(drawFireball);
+    drawPup();
+    // Dragon flickers when invincible
+    if (invTimer===0 || Math.floor(invTimer/7)%2===0) drawDragon();
+    // Particles
+    particles.forEach(p => {
+      ctx.globalAlpha = p.life/p.max;
+      ctx.fillStyle=p.color;
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+    });
+    ctx.globalAlpha=1;
+    drawHUD();
+  } else {
+    drawGameOver();
+  }
+
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
