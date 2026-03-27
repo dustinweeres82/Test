@@ -2,32 +2,50 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <title>Winter Runner</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: #e8e4dc;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100vh;
-    font-family: 'Georgia', serif;
-    overflow: hidden;
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #2a2a2a; font-family: 'Georgia', serif; }
+  canvas { display: block; position: fixed; top: 0; left: 0; width: 100%; height: 100%; touch-action: none; }
+  #rotate {
+    display: none;
+    position: fixed; inset: 0; background: #1a1a1a; color: #f0ece4;
+    flex-direction: column; align-items: center; justify-content: center;
+    font-family: Georgia, serif; font-size: 1.1rem; letter-spacing: 2px; z-index: 10;
   }
-  h1 { font-size: 1.4rem; color: #2a2a2a; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 10px; opacity: 0.7; }
-  canvas { border: 1.5px solid #2a2a2a; background: #f0ece4; image-rendering: crisp-edges; box-shadow: 3px 3px 0 #2a2a2a; touch-action: none; }
-  #info { margin-top: 10px; font-size: 0.75rem; color: #888; letter-spacing: 1px; }
+  #rotate span { font-size: 2.5rem; margin-bottom: 16px; }
+  @media (orientation: portrait) and (max-width: 600px) { #rotate { display: flex; } }
 </style>
 </head>
 <body>
-<h1>Winter Runner</h1>
-<canvas id="canvas" width="800" height="300"></canvas>
-<div id="info">TAP / SPACE to jump &nbsp;·&nbsp; double jump &nbsp;·&nbsp; rocket on 3rd</div>
+<canvas id="canvas"></canvas>
+<div id="rotate"><span>&#8635;</span>Rotate for best experience</div>
 <script>
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+
+// ── Viewport scaling ──────────────────────────────────────────────────────────
+// Virtual game size (internal coordinate space)
+var VW = 800, VH = 300;
+var scale = 1, offX = 0, offY = 0;
+
+function resize() {
+  var dpr = window.devicePixelRatio || 1;
+  var vw = window.innerWidth, vh = window.innerHeight;
+  canvas.width  = vw * dpr;
+  canvas.height = vh * dpr;
+  canvas.style.width  = vw + 'px';
+  canvas.style.height = vh + 'px';
+  // Scale to fit virtual game area, centered
+  scale = Math.min(vw / VW, vh / VH) * dpr;
+  offX  = (canvas.width  - VW * scale) / 2;
+  offY  = (canvas.height - VH * scale) / 2;
+}
+window.addEventListener('resize', resize);
+resize();
 
 // ── Sketch helpers ────────────────────────────────────────────────────────────
 function sk(x1,y1,x2,y2,w){ w=w||1.2; ctx.beginPath(); ctx.moveTo(x1+(Math.random()-.5)*w,y1+(Math.random()-.5)*w); ctx.lineTo(x2+(Math.random()-.5)*w,y2+(Math.random()-.5)*w); ctx.stroke(); }
@@ -85,7 +103,7 @@ function resetRun(){
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
-function cpos(cx,cy){ var r=canvas.getBoundingClientRect(); return{x:(cx-r.left)*(800/r.width),y:(cy-r.top)*(300/r.height)}; }
+function cpos(cx,cy){ var dpr=window.devicePixelRatio||1; return{x:((cx*dpr)-offX)/scale, y:((cy*dpr)-offY)/scale}; }
 function inB(p,b){ return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h; }
 
 function doJump(){
@@ -189,9 +207,9 @@ function drawHUD(){
   if(hiScore>0) ctx.fillText('Best: '+Math.floor(hiScore),16,42);
   // Coins top-right
   ctx.textAlign='right'; ctx.fillStyle=goldenRun?'#DAA520':'#8B6914'; ctx.font='bold 13px Georgia';
-  ctx.fillText('$ '+(totalCoins+coinsRun),784,24);
+  ctx.fillText('$ '+(totalCoins+coinsRun),VW-16,24);
   ctx.fillStyle='#aaa'; ctx.font='11px Georgia';
-  ctx.fillText('+'+coinsRun+' this run'+(goldenRun?' ★2x':''),784,40);
+  ctx.fillText('+'+coinsRun+' this run'+(goldenRun?' ★2x':''),VW-16,40);
   // Combo
   if(combo>=3){
     ctx.textAlign='center'; ctx.fillStyle='#e67e22'; ctx.font='bold 12px Georgia';
@@ -214,8 +232,8 @@ function drawHUD(){
   for(var i=0;i<ITEMS.length;i++){ if(!owned[ITEMS[i].id]&&ITEMS[i].cost<nextCost){ nextCost=ITEMS[i].cost; nextItem=ITEMS[i]; } }
   if(nextItem){
     var need=nextCost-(totalCoins+coinsRun);
-    if(need>0){ ctx.textAlign='right'; ctx.fillStyle='#aaa'; ctx.font='10px Georgia'; ctx.fillText(nextItem.name+': '+need+' more coins',784,262); }
-    else { ctx.textAlign='right'; ctx.fillStyle='#2ecc71'; ctx.font='bold 10px Georgia'; ctx.fillText(nextItem.name+' — ready to buy!',784,262); }
+    if(need>0){ ctx.textAlign='right'; ctx.fillStyle='#aaa'; ctx.font='10px Georgia'; ctx.fillText(nextItem.name+': '+need+' more coins',VW-16,262); }
+    else { ctx.textAlign='right'; ctx.fillStyle='#2ecc71'; ctx.font='bold 10px Georgia'; ctx.fillText(nextItem.name+' — ready to buy!',VW-16,262); }
   }
   ctx.restore();
 }
@@ -224,20 +242,20 @@ function drawShop(){
   ctx.save();
   ctx.fillStyle='rgba(240,236,228,0.97)'; ctx.fillRect(0,0,800,300);
   ctx.strokeStyle='#2a2a2a'; ctx.lineWidth=1.5;
-  sk(18,18,782,18,1); sk(18,282,782,282,1); sk(18,18,18,282,1); sk(782,18,782,282,1);
+  sk(18,18,VW-18,18,1); sk(18,VH-18,VW-18,VH-18,1); sk(18,18,18,VH-18,1); sk(VW-18,18,VW-18,VH-18,1);
 
   // Header
   ctx.fillStyle='#1a1a1a'; ctx.font='bold 20px Georgia'; ctx.textAlign='left';
   ctx.fillText('SHOP',28,44);
   ctx.fillStyle='#8B6914'; ctx.font='bold 13px Georgia'; ctx.textAlign='right';
-  ctx.fillText('$ '+totalCoins+'  (+'+coinsRun+' this run)',772,44);
+  ctx.fillText('$ '+totalCoins+'  (+'+coinsRun+' this run)',VW-28,44);
 
   // Score result
   var finalScore=Math.floor(owned.multi?score*2:score);
   ctx.fillStyle='#555'; ctx.font='12px Georgia';
-  ctx.fillText('Run score: '+finalScore+(finalScore>=hiScore?' — NEW BEST!':'  (Best: '+Math.floor(hiScore)+')'),772,62);
+  ctx.fillText('Run score: '+finalScore+(finalScore>=hiScore?' — NEW BEST!':'  (Best: '+Math.floor(hiScore)+')'),VW-28,62);
 
-  sk(24,68,776,68,0.5);
+  sk(24,68,VW-24,68,0.5);
 
   // Items
   for(var i=0;i<ITEMS.length;i++){
@@ -258,7 +276,7 @@ function drawShop(){
     }
   }
 
-  sk(24,208,776,208,0.5);
+  sk(24,208,VW-24,208,0.5);
 
   // "So close!" message
   if(finalScore>0&&finalScore>=hiScore-12&&finalScore<hiScore){
@@ -397,19 +415,27 @@ function update(){
 
 // ── Draw ──────────────────────────────────────────────────────────────────────
 function draw(){
-  ctx.clearRect(0,0,800,300);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  // Screen shake transform
+  // Fill letterbox areas
+  ctx.fillStyle='#2a2a2a';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  // Game background
+  ctx.fillStyle='#f0ece4';
+  ctx.fillRect(offX,offY,VW*scale,VH*scale);
+
+  // Screen shake + viewport transform
   ctx.save();
-  if(shakeX||shakeY) ctx.translate(shakeX,shakeY);
+  ctx.translate(offX + shakeX*scale, offY + shakeY*scale);
+  ctx.scale(scale, scale);
 
   // Paper noise
   ctx.save(); ctx.globalAlpha=0.025;
-  for(var i=0;i<150;i++){ctx.fillStyle='#555';ctx.fillRect(Math.random()*800,Math.random()*300,1,1);}
+  for(var i=0;i<150;i++){ctx.fillStyle='#555';ctx.fillRect(Math.random()*VW,Math.random()*VH,1,1);}
   ctx.restore();
 
   // Golden tint
-  if(goldenRun){ ctx.save(); ctx.globalAlpha=0.07; ctx.fillStyle='#DAA520'; ctx.fillRect(0,0,800,300); ctx.restore(); }
+  if(goldenRun){ ctx.save(); ctx.globalAlpha=0.07; ctx.fillStyle='#DAA520'; ctx.fillRect(0,0,VW,VH); ctx.restore(); }
 
   // BG trees
   for(var i=0;i<bgTrees.length;i++){ ctx.save(); ctx.globalAlpha=bgTrees[i].a; drawTree(bgTrees[i].x,G,bgTrees[i].h,bgTrees[i].seed); ctx.restore(); }
@@ -450,12 +476,12 @@ function draw(){
   // Overlays (not affected by shake)
   if(state==='start'){
     ctx.save();
-    ctx.fillStyle='rgba(240,236,228,0.88)'; ctx.fillRect(0,0,800,300);
+    ctx.fillStyle='rgba(240,236,228,0.88)'; ctx.fillRect(0,0,VW,VH);
     ctx.fillStyle='#1a1a1a'; ctx.font='bold 26px Georgia'; ctx.textAlign='center';
-    ctx.fillText('WINTER RUNNER',400,115);
+    ctx.fillText('WINTER RUNNER',VW/2,VH*0.38);
     ctx.font='13px Georgia'; ctx.fillStyle='#555';
-    ctx.fillText('Collect coins. Buy upgrades. Go further.',400,145);
-    ctx.fillText('Tap or press SPACE to begin',400,170);
+    ctx.fillText('Collect coins. Buy upgrades. Go further.',VW/2,VH*0.55);
+    ctx.fillText('Tap or press SPACE to begin',VW/2,VH*0.68);
     ctx.restore();
   }
   if(state==='shop'||state==='dying') drawShop();
