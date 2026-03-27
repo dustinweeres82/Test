@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Budget Quest</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', sans-serif;
+    background: #0f0c29;
+    background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+    min-height: 100vh;
+    color: #fff;
+    overflow-x: hidden;
+  }
+
+  header {
+    background: rgba(255,255,255,0.05);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .logo { font-size: 1.5rem; font-weight: 800; letter-spacing: 1px; }
+  .logo span { color: #f7c948; }
+
+  .player-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 0.85rem;
+  }
+
+  .level-badge {
+    background: linear-gradient(135deg, #f7c948, #f76b1c);
+    color: #000;
+    font-weight: 800;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.9rem;
+  }
+
+  .xp-bar-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 140px;
+  }
+
+  .xp-label { font-size: 0.72rem; color: #aaa; }
+
+  .xp-bar {
+    height: 8px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .xp-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #a855f7, #6366f1);
+    border-radius: 10px;
+    transition: width 0.6s ease;
+  }
+
+  .streak-badge {
+    background: rgba(251,146,60,0.2);
+    border: 1px solid #fb923c;
+    color: #fb923c;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px 16px;
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 20px;
+  }
+
+  @media (max-width: 768px) {
+    main { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 16px;
+    padding: 20px;
+    backdrop-filter: blur(8px);
+  }
+
+  .card h2 {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 16px;
+    color: #c4b5fd;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  /* Add Expense Form */
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .form-group.full { grid-column: 1 / -1; }
+
+  label { font-size: 0.8rem; color: #9ca3af; font-weight: 600; }
+
+  input, select, textarea {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px;
+    color: #fff;
+    padding: 10px 14px;
+    font-size: 0.9rem;
+    outline: none;
+    transition: border-color 0.2s, background 0.2s;
+    width: 100%;
+  }
+
+  input:focus, select:focus, textarea:focus {
+    border-color: #a855f7;
+    background: rgba(168,85,247,0.1);
+  }
+
+  input::placeholder { color: #6b7280; }
+
+  select option { background: #302b63; }
+
+  .btn-add {
+    grid-column: 1 / -1;
+    background: linear-gradient(135deg, #a855f7, #6366f1);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    letter-spacing: 0.5px;
+  }
+
+  .btn-add:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(168,85,247,0.4);
+  }
+
+  .btn-add:active { transform: translateY(0); }
+
+  /* Category icons */
+  .cat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+
+  .cat-btn {
+    background: rgba(255,255,255,0.06);
+    border: 2px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    padding: 8px 4px;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.2s;
+    color: #fff;
+    font-size: 0.72rem;
+  }
+
+  .cat-btn .icon { font-size: 1.4rem; display: block; margin-bottom: 2px; }
+  .cat-btn:hover { border-color: #a855f7; background: rgba(168,85,247,0.15); }
+  .cat-btn.active { border-color: #a855f7; background: rgba(168,85,247,0.25); }
+
+  /* Expense list */
+  .expense-list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+
+  .expense-list::-webkit-scrollbar { width: 4px; }
+  .expense-list::-webkit-scrollbar-track { background: transparent; }
+  .expense-list::-webkit-scrollbar-thumb { background: rgba(168,85,247,0.4); border-radius: 4px; }
+
+  .expense-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 10px;
+    padding: 10px 14px;
+    animation: slideIn 0.3s ease;
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-16px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  .expense-icon { font-size: 1.4rem; width: 32px; text-align: center; }
+
+  .expense-info { flex: 1; }
+  .expense-name { font-size: 0.88rem; font-weight: 600; }
+  .expense-meta { font-size: 0.72rem; color: #9ca3af; margin-top: 1px; }
+
+  .expense-amount { font-weight: 700; color: #f87171; font-size: 0.95rem; }
+
+  .expense-xp {
+    font-size: 0.7rem;
+    background: rgba(168,85,247,0.3);
+    color: #c4b5fd;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-weight: 700;
+  }
+
+  /* Budget meters */
+  .budget-meters { display: flex; flex-direction: column; gap: 12px; }
+
+  .meter-row { }
+  .meter-header { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 4px; }
+  .meter-name { display: flex; align-items: center; gap: 6px; }
+  .meter-values { color: #9ca3af; }
+  .meter-bar { height: 10px; background: rgba(255,255,255,0.1); border-radius: 10px; overflow: hidden; }
+  .meter-fill {
+    height: 100%;
+    border-radius: 10px;
+    transition: width 0.6s ease;
+  }
+
+  /* Right column */
+  .right-col { display: flex; flex-direction: column; gap: 20px; }
+
+  /* Stats */
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .stat-box {
+    background: rgba(255,255,255,0.05);
+    border-radius: 12px;
+    padding: 14px;
+    text-align: center;
+  }
+
+  .stat-val { font-size: 1.5rem; font-weight: 800; }
+  .stat-label { font-size: 0.7rem; color: #9ca3af; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Achievements */
+  .achievement-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .achievement {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.07);
+    transition: all 0.3s;
+  }
+
+  .achievement.unlocked {
+    background: rgba(247,201,72,0.1);
+    border-color: rgba(247,201,72,0.3);
+  }
+
+  .achievement-icon { font-size: 1.5rem; width: 32px; text-align: center; filter: grayscale(1); opacity: 0.4; }
+  .achievement.unlocked .achievement-icon { filter: none; opacity: 1; }
+  .achievement-info { flex: 1; }
+  .achievement-name { font-size: 0.82rem; font-weight: 700; color: #9ca3af; }
+  .achievement.unlocked .achievement-name { color: #f7c948; }
+  .achievement-desc { font-size: 0.7rem; color: #6b7280; margin-top: 1px; }
+
+  /* Toast notification */
+  #toast-container {
+    position: fixed;
+    top: 80px;
+    right: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 1000;
+    pointer-events: none;
+  }
+
+  .toast {
+    background: rgba(30,25,60,0.95);
+    border: 1px solid rgba(168,85,247,0.5);
+    border-radius: 12px;
+    padding: 12px 18px;
+    font-size: 0.88rem;
+    max-width: 280px;
+    animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  .toast.achievement-toast { border-color: rgba(247,201,72,0.6); }
+  .toast.levelup-toast { border-color: rgba(99,102,241,0.8); background: rgba(99,102,241,0.2); }
+
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateX(40px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes toastOut {
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(40px); }
+  }
+
+  /* XP popup */
+  .xp-popup {
+    position: fixed;
+    pointer-events: none;
+    font-size: 1.1rem;
+    font-weight: 800;
+    color: #a855f7;
+    text-shadow: 0 0 10px #a855f7;
+    animation: xpFloat 1.2s ease forwards;
+    z-index: 999;
+  }
+
+  @keyframes xpFloat {
+    0% { opacity: 1; transform: translateY(0) scale(1); }
+    100% { opacity: 0; transform: translateY(-60px) scale(1.3); }
+  }
+
+  /* Challenges */
+  .challenge-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .challenge {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+
+  .challenge-header { display: flex; justify-content: space-between; font-size: 0.82rem; font-weight: 700; margin-bottom: 6px; }
+  .challenge-reward { color: #f7c948; font-size: 0.75rem; }
+  .challenge-bar { height: 6px; background: rgba(255,255,255,0.1); border-radius: 6px; overflow: hidden; }
+  .challenge-fill { height: 100%; background: linear-gradient(90deg, #10b981, #34d399); border-radius: 6px; transition: width 0.5s ease; }
+
+  /* Combo multiplier */
+  .combo-display {
+    text-align: center;
+    padding: 8px;
+    background: rgba(249,115,22,0.15);
+    border: 1px solid rgba(249,115,22,0.3);
+    border-radius: 10px;
+    font-size: 0.82rem;
+    color: #fb923c;
+    font-weight: 700;
+    display: none;
+  }
+
+  .combo-display.visible { display: block; }
+
+  /* Monthly summary */
+  .summary-ring {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  svg.ring { transform: rotate(-90deg); }
+
+  .ring-label {
+    text-align: center;
+    font-size: 1.8rem;
+    font-weight: 800;
+    margin-top: -4px;
+  }
+
+  .ring-sub { color: #9ca3af; font-size: 0.78rem; text-align: center; }
+
+  .section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .section-title h2 { margin-bottom: 0; }
+  .badge-count {
+    background: rgba(168,85,247,0.3);
+    color: #c4b5fd;
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 700;
+  }
+
+  .empty-state {
+    text-align: center;
+    color: #6b7280;
+    font-size: 0.85rem;
+    padding: 20px 0;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Budget<span>Quest</span></div>
+  <div class="player-bar">
+    <div class="streak-badge" id="streakBadge">🔥 1 day streak</div>
+    <div class="level-badge" id="levelBadge">LVL 1</div>
+    <div class="xp-bar-wrap">
+      <div class="xp-label" id="xpLabel">0 / 100 XP</div>
+      <div class="xp-bar"><div class="xp-fill" id="xpFill" style="width:0%"></div></div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- Left column -->
+  <div style="display:flex;flex-direction:column;gap:20px;">
+
+    <!-- Add Expense -->
+    <div class="card">
+      <h2>Add Expense</h2>
+
+      <div class="cat-grid" id="catGrid">
+        <button class="cat-btn active" data-cat="Food" onclick="selectCat(this)"><span class="icon">🍔</span>Food</button>
+        <button class="cat-btn" data-cat="Transport" onclick="selectCat(this)"><span class="icon">🚗</span>Transport</button>
+        <button class="cat-btn" data-cat="Entertainment" onclick="selectCat(this)"><span class="icon">🎮</span>Fun</button>
+        <button class="cat-btn" data-cat="Shopping" onclick="selectCat(this)"><span class="icon">🛍️</span>Shopping</button>
+        <button class="cat-btn" data-cat="Health" onclick="selectCat(this)"><span class="icon">💊</span>Health</button>
+        <button class="cat-btn" data-cat="Bills" onclick="selectCat(this)"><span class="icon">⚡</span>Bills</button>
+        <button class="cat-btn" data-cat="Coffee" onclick="selectCat(this)"><span class="icon">☕</span>Coffee</button>
+        <button class="cat-btn" data-cat="Other" onclick="selectCat(this)"><span class="icon">📦</span>Other</button>
+      </div>
+
+      <div id="comboDisplay" class="combo-display">⚡ x<span id="comboCount">2</span> Combo! Bonus XP!</div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Description</label>
+          <input type="text" id="expDesc" placeholder="e.g. Lunch at cafe">
+        </div>
+        <div class="form-group">
+          <label>Amount ($)</label>
+          <input type="number" id="expAmount" placeholder="0.00" min="0" step="0.01">
+        </div>
+        <div class="form-group">
+          <label>Date</label>
+          <input type="date" id="expDate">
+        </div>
+        <div class="form-group">
+          <label>Note (optional)</label>
+          <input type="text" id="expNote" placeholder="Any notes...">
+        </div>
+        <button class="btn-add" onclick="addExpense()">+ Log Expense &amp; Earn XP</button>
+      </div>
+    </div>
+
+    <!-- Budget Meters -->
+    <div class="card">
+      <div class="section-title">
+        <h2>Monthly Budgets</h2>
+        <span style="font-size:0.78rem;color:#9ca3af;">Mar 2026</span>
+      </div>
+      <div class="budget-meters" id="budgetMeters"></div>
+    </div>
+
+    <!-- Recent Expenses -->
+    <div class="card">
+      <div class="section-title">
+        <h2>Recent Expenses</h2>
+        <span class="badge-count" id="expCount">0 logged</span>
+      </div>
+      <div class="expense-list" id="expenseList">
+        <div class="empty-state">No expenses yet. Start logging to earn XP!</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right column -->
+  <div class="right-col">
+
+    <!-- Stats -->
+    <div class="card">
+      <h2>Stats</h2>
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="stat-val" id="totalSpent" style="color:#f87171;">$0</div>
+          <div class="stat-label">Spent</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-val" id="totalXP" style="color:#a855f7;">0</div>
+          <div class="stat-label">Total XP</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-val" id="expenseCount" style="color:#34d399;">0</div>
+          <div class="stat-label">Logged</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-val" id="savedStat" style="color:#f7c948;">$0</div>
+          <div class="stat-label">Budget Left</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Challenges -->
+    <div class="card">
+      <h2>Daily Challenges</h2>
+      <div class="challenge-list" id="challengeList"></div>
+    </div>
+
+    <!-- Achievements -->
+    <div class="card">
+      <div class="section-title">
+        <h2>Achievements</h2>
+        <span class="badge-count" id="achCount">0 / 8</span>
+      </div>
+      <div class="achievement-list" id="achievementList"></div>
+    </div>
+
+  </div>
+</main>
+
+<div id="toast-container"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────
+let state = JSON.parse(localStorage.getItem('bq_state') || 'null') || {
+  xp: 0,
+  level: 1,
+  streak: 1,
+  lastLogDate: null,
+  expenses: [],
+  unlockedAchievements: [],
+  combo: 0,
+  lastComboTime: null,
+  challenges: generateChallenges(),
+  totalXP: 0,
+};
+
+const XP_PER_LEVEL = 100;
+const COMBO_WINDOW_MS = 30000; // 30s window for combo
+
+const CATEGORIES = {
+  Food:          { icon: '🍔', color: '#f97316', budget: 400 },
+  Transport:     { icon: '🚗', color: '#3b82f6', budget: 200 },
+  Entertainment: { icon: '🎮', color: '#8b5cf6', budget: 150 },
+  Shopping:      { icon: '🛍️', color: '#ec4899', budget: 300 },
+  Health:        { icon: '💊', color: '#10b981', budget: 100 },
+  Bills:         { icon: '⚡', color: '#f59e0b', budget: 500 },
+  Coffee:        { icon: '☕', color: '#92400e', budget: 60 },
+  Other:         { icon: '📦', color: '#6b7280', budget: 200 },
+};
+
+const ACHIEVEMENTS = [
+  { id: 'first',    icon: '🌟', name: 'First Step',       desc: 'Log your first expense',           check: s => s.expenses.length >= 1 },
+  { id: 'five',     icon: '🎯', name: 'Getting Serious',  desc: 'Log 5 expenses',                   check: s => s.expenses.length >= 5 },
+  { id: 'ten',      icon: '🏆', name: 'Dedicated Logger', desc: 'Log 10 expenses',                  check: s => s.expenses.length >= 10 },
+  { id: 'combo3',   icon: '⚡', name: 'Combo King',       desc: 'Achieve a x3 combo',               check: s => s.expenses.filter((e,i,a) => i>0 && (e.ts - a[i-1].ts) < COMBO_WINDOW_MS).length >= 2 },
+  { id: 'lvl3',     icon: '🚀', name: 'Level Up!',        desc: 'Reach level 3',                    check: s => s.level >= 3 },
+  { id: 'streak3',  icon: '🔥', name: 'On Fire',          desc: '3-day logging streak',             check: s => s.streak >= 3 },
+  { id: 'saver',    icon: '💰', name: 'Budget Hero',      desc: 'Stay under budget for all categories', check: s => allUnderBudget(s) },
+  { id: 'coffee',   icon: '☕', name: 'Caffeine Addict',  desc: 'Log 5 coffee expenses',            check: s => s.expenses.filter(e => e.cat === 'Coffee').length >= 5 },
+];
+
+let selectedCat = 'Food';
+
+// ── Init ───────────────────────────────────────────────────────────────
+document.getElementById('expDate').value = todayStr();
+updateStreak();
+renderAll();
+
+// ── Core Functions ─────────────────────────────────────────────────────
+function addExpense() {
+  const desc   = document.getElementById('expDesc').value.trim();
+  const amount = parseFloat(document.getElementById('expAmount').value);
+  const date   = document.getElementById('expDate').value;
+  const note   = document.getElementById('expNote').value.trim();
+
+  if (!desc) { shake('expDesc'); return; }
+  if (!amount || amount <= 0) { shake('expAmount'); return; }
+  if (!date) { shake('expDate'); return; }
+
+  // Combo calculation
+  const now = Date.now();
+  const timeSinceLast = now - (state.lastComboTime || 0);
+  if (timeSinceLast < COMBO_WINDOW_MS) {
+    state.combo = Math.min(state.combo + 1, 5);
+  } else {
+    state.combo = 1;
+  }
+  state.lastComboTime = now;
+
+  const baseXP = Math.max(5, Math.round(Math.sqrt(amount) * 2 + 10));
+  const xpGained = baseXP * state.combo;
+
+  const expense = {
+    id: Date.now(),
+    desc, amount, date, note,
+    cat: selectedCat,
+    xp: xpGained,
+    ts: now,
+  };
+
+  state.expenses.unshift(expense);
+  state.lastLogDate = date;
+
+  addXP(xpGained, expense);
+  checkChallenges(expense);
+  checkAchievements();
+  updateStats();
+  renderExpenses();
+  renderBudgetMeters();
+  renderChallenges();
+  save();
+
+  // Clear fields
+  document.getElementById('expDesc').value = '';
+  document.getElementById('expAmount').value = '';
+  document.getElementById('expNote').value = '';
+
+  // Combo display
+  if (state.combo > 1) {
+    document.getElementById('comboCount').textContent = state.combo;
+    document.getElementById('comboDisplay').classList.add('visible');
+    setTimeout(() => document.getElementById('comboDisplay').classList.remove('visible'), 3000);
+  }
+
+  // XP popup near button
+  spawnXPPopup(xpGained);
+}
+
+function addXP(amount) {
+  state.xp += amount;
+  state.totalXP += amount;
+
+  while (state.xp >= XP_PER_LEVEL) {
+    state.xp -= XP_PER_LEVEL;
+    state.level++;
+    showToast(`🚀 Level Up! You're now Level ${state.level}!`, 'levelup-toast');
+  }
+
+  renderXPBar();
+}
+
+function renderXPBar() {
+  const pct = (state.xp / XP_PER_LEVEL) * 100;
+  document.getElementById('xpFill').style.width = pct + '%';
+  document.getElementById('xpLabel').textContent = `${state.xp} / ${XP_PER_LEVEL} XP`;
+  document.getElementById('levelBadge').textContent = `LVL ${state.level}`;
+  document.getElementById('totalXP').textContent = state.totalXP;
+}
+
+function renderExpenses() {
+  const list = document.getElementById('expenseList');
+  const count = state.expenses.length;
+  document.getElementById('expCount').textContent = `${count} logged`;
+  document.getElementById('expenseCount').textContent = count;
+
+  if (count === 0) {
+    list.innerHTML = '<div class="empty-state">No expenses yet. Start logging to earn XP!</div>';
+    return;
+  }
+
+  list.innerHTML = state.expenses.slice(0, 20).map(e => {
+    const cat = CATEGORIES[e.cat] || CATEGORIES.Other;
+    return `
+      <div class="expense-item">
+        <div class="expense-icon">${cat.icon}</div>
+        <div class="expense-info">
+          <div class="expense-name">${esc(e.desc)}</div>
+          <div class="expense-meta">${e.cat} · ${e.date}${e.note ? ' · ' + esc(e.note) : ''}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;">
+          <div class="expense-amount">-$${e.amount.toFixed(2)}</div>
+          <div class="expense-xp">+${e.xp} XP</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function renderBudgetMeters() {
+  const container = document.getElementById('budgetMeters');
+  const spent = {};
+  const thisMonth = new Date().toISOString().slice(0, 7);
+
+  state.expenses.forEach(e => {
+    if (e.date.startsWith(thisMonth)) {
+      spent[e.cat] = (spent[e.cat] || 0) + e.amount;
+    }
+  });
+
+  container.innerHTML = Object.entries(CATEGORIES).map(([name, cat]) => {
+    const s = spent[name] || 0;
+    const pct = Math.min((s / cat.budget) * 100, 100);
+    const color = pct > 90 ? '#ef4444' : pct > 70 ? '#f97316' : cat.color;
+    return `
+      <div class="meter-row">
+        <div class="meter-header">
+          <div class="meter-name">${cat.icon} ${name}</div>
+          <div class="meter-values" style="color:${color}">$${s.toFixed(0)} / $${cat.budget}</div>
+        </div>
+        <div class="meter-bar">
+          <div class="meter-fill" style="width:${pct}%;background:${color}"></div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function updateStats() {
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  let total = 0;
+  const budgetTotal = Object.values(CATEGORIES).reduce((a, c) => a + c.budget, 0);
+  const spent = {};
+
+  state.expenses.forEach(e => {
+    if (e.date.startsWith(thisMonth)) {
+      total += e.amount;
+      spent[e.cat] = (spent[e.cat] || 0) + e.amount;
+    }
+  });
+
+  document.getElementById('totalSpent').textContent = '$' + total.toFixed(0);
+  document.getElementById('savedStat').textContent = '$' + Math.max(0, budgetTotal - total).toFixed(0);
+}
+
+function renderChallenges() {
+  const container = document.getElementById('challengeList');
+  const today = todayStr();
+
+  // Reset daily challenges if new day
+  if (state.challenges.date !== today) {
+    state.challenges = generateChallenges();
+    state.challenges.date = today;
+    save();
+  }
+
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const todayExpenses = state.expenses.filter(e => e.date === today);
+  const monthExpenses = state.expenses.filter(e => e.date.startsWith(thisMonth));
+
+  const progress = [
+    Math.min(todayExpenses.length, state.challenges.items[0].goal),
+    Math.min(new Set(todayExpenses.map(e => e.cat)).size, state.challenges.items[1].goal),
+    Math.min(monthExpenses.length, state.challenges.items[2].goal),
+  ];
+
+  container.innerHTML = state.challenges.items.map((ch, i) => {
+    const pct = (progress[i] / ch.goal) * 100;
+    const done = progress[i] >= ch.goal;
+    return `
+      <div class="challenge" style="${done ? 'border-color:rgba(52,211,153,0.4);background:rgba(52,211,153,0.08)' : ''}">
+        <div class="challenge-header">
+          <span>${done ? '✅' : '🎯'} ${ch.name}</span>
+          <span class="challenge-reward">+${ch.xp} XP</span>
+        </div>
+        <div style="font-size:0.72rem;color:#9ca3af;margin-bottom:6px;">${progress[i]}/${ch.goal} ${ch.unit}</div>
+        <div class="challenge-bar"><div class="challenge-fill" style="width:${pct}%"></div></div>
+      </div>`;
+  }).join('');
+}
+
+function checkChallenges(expense) {
+  const today = todayStr();
+  const todayExpenses = state.expenses.filter(e => e.date === today);
+
+  // Award XP for completing challenges
+  const ch = state.challenges.items;
+  const prev = state.challenges.completed || [];
+
+  if (todayExpenses.length >= ch[0].goal && !prev.includes(0)) {
+    state.challenges.completed = [...prev, 0];
+    addXP(ch[0].xp);
+    showToast(`🎯 Challenge Complete: "${ch[0].name}" +${ch[0].xp} XP!`);
+  }
+  if (new Set(todayExpenses.map(e => e.cat)).size >= ch[1].goal && !prev.includes(1)) {
+    state.challenges.completed = [...(state.challenges.completed || []), 1];
+    addXP(ch[1].xp);
+    showToast(`🎯 Challenge Complete: "${ch[1].name}" +${ch[1].xp} XP!`);
+  }
+}
+
+function checkAchievements() {
+  ACHIEVEMENTS.forEach(ach => {
+    if (!state.unlockedAchievements.includes(ach.id) && ach.check(state)) {
+      state.unlockedAchievements.push(ach.id);
+      showToast(`🏆 Achievement Unlocked: "${ach.name}"!`, 'achievement-toast');
+      addXP(50);
+    }
+  });
+  renderAchievements();
+}
+
+function renderAchievements() {
+  const container = document.getElementById('achievementList');
+  const unlocked = state.unlockedAchievements.length;
+  document.getElementById('achCount').textContent = `${unlocked} / ${ACHIEVEMENTS.length}`;
+
+  container.innerHTML = ACHIEVEMENTS.map(ach => {
+    const isUnlocked = state.unlockedAchievements.includes(ach.id);
+    return `
+      <div class="achievement ${isUnlocked ? 'unlocked' : ''}">
+        <div class="achievement-icon">${ach.icon}</div>
+        <div class="achievement-info">
+          <div class="achievement-name">${ach.name}</div>
+          <div class="achievement-desc">${ach.desc}</div>
+        </div>
+        ${isUnlocked ? '<div style="font-size:0.7rem;color:#f7c948;font-weight:700;">+50 XP</div>' : ''}
+      </div>`;
+  }).join('');
+}
+
+function renderAll() {
+  renderXPBar();
+  renderExpenses();
+  renderBudgetMeters();
+  renderChallenges();
+  renderAchievements();
+  updateStats();
+  document.getElementById('streakBadge').textContent = `🔥 ${state.streak} day streak`;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────
+function selectCat(btn) {
+  document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedCat = btn.dataset.cat;
+}
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function updateStreak() {
+  const today = todayStr();
+  const last = state.lastLogDate;
+  if (!last) return;
+
+  const diff = Math.floor((new Date(today) - new Date(last)) / 86400000);
+  if (diff === 1) {
+    // consecutive day
+  } else if (diff > 1) {
+    state.streak = 1;
+    save();
+  }
+}
+
+function generateChallenges() {
+  return {
+    date: todayStr(),
+    completed: [],
+    items: [
+      { name: 'Log 3 expenses today', goal: 3, unit: 'expenses', xp: 30 },
+      { name: 'Use 3 different categories', goal: 3, unit: 'categories', xp: 40 },
+      { name: 'Log 10 expenses this month', goal: 10, unit: 'total', xp: 100 },
+    ],
+  };
+}
+
+function allUnderBudget(s) {
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const spent = {};
+  s.expenses.filter(e => e.date.startsWith(thisMonth)).forEach(e => {
+    spent[e.cat] = (spent[e.cat] || 0) + e.amount;
+  });
+  return Object.entries(CATEGORIES).every(([name, cat]) => (spent[name] || 0) <= cat.budget);
+}
+
+function spawnXPPopup(xp) {
+  const btn = document.querySelector('.btn-add');
+  const rect = btn.getBoundingClientRect();
+  const el = document.createElement('div');
+  el.className = 'xp-popup';
+  el.textContent = `+${xp} XP${xp > 15 ? ' 🔥' : ''}`;
+  el.style.left = (rect.left + rect.width / 2 - 30) + 'px';
+  el.style.top = (rect.top + window.scrollY - 10) + 'px';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 1300);
+}
+
+function showToast(msg, cls = '') {
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast ${cls}`;
+  el.innerHTML = `<span>${msg}</span>`;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+function shake(id) {
+  const el = document.getElementById(id);
+  el.style.borderColor = '#ef4444';
+  el.style.animation = 'none';
+  el.offsetHeight;
+  el.style.animation = 'shake 0.4s ease';
+  setTimeout(() => { el.style.borderColor = ''; el.style.animation = ''; }, 500);
+}
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function save() {
+  localStorage.setItem('bq_state', JSON.stringify(state));
+}
+
+// Add shake keyframe
+const style = document.createElement('style');
+style.textContent = `
+@keyframes shake {
+  0%,100%{transform:translateX(0)}
+  20%{transform:translateX(-6px)}
+  40%{transform:translateX(6px)}
+  60%{transform:translateX(-4px)}
+  80%{transform:translateX(4px)}
+}`;
+document.head.appendChild(style);
+</script>
+</body>
+</html>
