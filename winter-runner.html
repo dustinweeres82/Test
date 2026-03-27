@@ -16,540 +16,453 @@
     font-family: 'Georgia', serif;
     overflow: hidden;
   }
-  h1 {
-    font-size: 1.4rem;
-    color: #2a2a2a;
-    letter-spacing: 3px;
-    text-transform: uppercase;
-    margin-bottom: 10px;
-    opacity: 0.7;
-  }
-  canvas {
-    border: 1.5px solid #2a2a2a;
-    background: #f0ece4;
-    image-rendering: crisp-edges;
-    box-shadow: 3px 3px 0 #2a2a2a;
-    touch-action: none;
-  }
-  #info {
-    margin-top: 10px;
-    font-size: 0.8rem;
-    color: #555;
-    letter-spacing: 2px;
-  }
+  h1 { font-size: 1.4rem; color: #2a2a2a; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 10px; opacity: 0.7; }
+  canvas { border: 1.5px solid #2a2a2a; background: #f0ece4; image-rendering: crisp-edges; box-shadow: 3px 3px 0 #2a2a2a; touch-action: none; }
+  #info { margin-top: 10px; font-size: 0.75rem; color: #888; letter-spacing: 1px; }
 </style>
 </head>
 <body>
 <h1>Winter Runner</h1>
 <canvas id="canvas" width="800" height="300"></canvas>
-<div id="info">SPACE / TAP to jump &nbsp;|&nbsp; Double-jump allowed</div>
-
+<div id="info">TAP / SPACE to jump &nbsp;·&nbsp; double jump &nbsp;·&nbsp; rocket on 3rd</div>
 <script>
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
-// ── Sketch helpers ───────────────────────────────────────────────────────────
-function sketchLine(x1, y1, x2, y2, wobble = 1.2) {
-  ctx.beginPath();
-  ctx.moveTo(x1 + (Math.random() - 0.5) * wobble, y1 + (Math.random() - 0.5) * wobble);
-  ctx.lineTo(x2 + (Math.random() - 0.5) * wobble, y2 + (Math.random() - 0.5) * wobble);
-  ctx.stroke();
+// ── Sketch helpers ────────────────────────────────────────────────────────────
+function sk(x1,y1,x2,y2,w){ w=w||1.2; ctx.beginPath(); ctx.moveTo(x1+(Math.random()-.5)*w,y1+(Math.random()-.5)*w); ctx.lineTo(x2+(Math.random()-.5)*w,y2+(Math.random()-.5)*w); ctx.stroke(); }
+function rng32(seed){ return function(){ seed|=0; seed=seed+0x6D2B79F5|0; var t=Math.imul(seed^seed>>>15,1|seed); t=t+Math.imul(t^t>>>7,61|t)^t; return((t^t>>>14)>>>0)/4294967296; }; }
+
+function drawTree(x,gy,h,seed){
+  var rng=rng32(seed); ctx.save(); ctx.strokeStyle='#1a1a1a'; ctx.lineCap='round';
+  function br(bx,by,a,l,d){ if(d===0||l<3)return; var ex=bx+Math.cos(a)*l,ey=by+Math.sin(a)*l; sk(bx,by,ex,ey,0.5); var sp=0.4+rng()*0.3; br(ex,ey,a-sp,l*(0.6+rng()*0.15),d-1); br(ex,ey,a+sp,l*(0.6+rng()*0.15),d-1); if(rng()>0.5&&d>2)br(ex,ey,a+(rng()-.5)*0.4,l*0.45,d-2); }
+  ctx.lineWidth=1.8; sk(x,gy,x+(rng()-.5)*4,gy-h*0.5,0.5); ctx.lineWidth=1.2; br(x,gy-h*0.5,-Math.PI/2,h*0.45,4); ctx.restore();
 }
 
-function mulberry32(seed) {
-  return function () {
-    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
-    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
+// ── Constants ─────────────────────────────────────────────────────────────────
+var G=240, GV=0.6, JF=-13, GS0=4, RF=90;
+
+// ── Persistent state ──────────────────────────────────────────────────────────
+var totalCoins=0, hiScore=0;
+var owned={ rocket:false, magnet:false, shield:false, multi:false };
+var seenMilestones={};
+
+var ITEMS=[
+  {id:'rocket', name:'Rocket Pack',  cost:30,  lines:['3rd jump = rocket boost!','Fuel recharges on landing.']},
+  {id:'magnet', name:'Coin Magnet',  cost:50,  lines:['Auto-collects nearby coins.','Never miss a coin again.']},
+  {id:'shield', name:'Shield',       cost:75,  lines:['Survive one tree hit per run.','Glows when active.']},
+  {id:'multi',  name:'Score x2',     cost:120, lines:['Double your score always.','For the high score flex.']},
+];
+
+// ── Per-run state ─────────────────────────────────────────────────────────────
+var state='start'; // start | playing | dying | shop
+var score=0, frame=0, gs=GS0, coinsRun=0, combo=0, maxComboRun=0;
+var shieldAlive=false, rocketOn=false, rocketFuel=0;
+var goldenRun=false, goldenTimer=0, nextGolden=350+Math.floor(Math.random()*400);
+var deathTimer=0, shakeX=0, shakeY=0;
+var nextMilestoneIdx=0;
+var SCORE_MILESTONES=[50,100,200,500,1000];
+
+var player={x:100,y:G,vy:0,jl:2,lp:0};
+var trees=[], coins=[], particles=[], bgTrees=[], popups=[];
+var ntree=120, ncoin=70;
+
+// Shop layout
+var SBTNS=[ {x:648,y:80,w:112,h:24}, {x:648,y:112,w:112,h:24}, {x:648,y:144,w:112,h:24}, {x:648,y:176,w:112,h:24} ];
+var BRUN={x:300,y:220,w:200,h:32};
+
+// ── Reset ─────────────────────────────────────────────────────────────────────
+function resetRun(){
+  player.y=G; player.vy=0; player.jl=2; player.lp=0;
+  trees=[]; coins=[]; particles=[]; popups=[];
+  score=0; frame=0; gs=GS0; coinsRun=0; combo=0; maxComboRun=0;
+  rocketOn=false; rocketFuel=owned.rocket?RF:0;
+  shieldAlive=owned.shield;
+  goldenRun=false; goldenTimer=0; nextGolden=350+Math.floor(Math.random()*400);
+  ntree=120; ncoin=70; nextMilestoneIdx=0;
+  bgTrees=[];
+  for(var i=0;i<12;i++) bgTrees.push({x:Math.random()*900-50,h:20+Math.random()*30,seed:Math.floor(Math.random()*10000),a:0.12+Math.random()*0.1,sp:0.3+Math.random()*0.4});
 }
 
-function drawBareTree(x, groundY, height, seed) {
-  const rng = mulberry32(seed);
-  ctx.save();
-  ctx.strokeStyle = '#1a1a1a';
-  ctx.lineWidth = 1.2;
-  ctx.lineCap = 'round';
-  function branch(bx, by, angle, len, depth) {
-    if (depth === 0 || len < 3) return;
-    const ex = bx + Math.cos(angle) * len;
-    const ey = by + Math.sin(angle) * len;
-    sketchLine(bx, by, ex, ey, 0.5);
-    const spread = 0.4 + rng() * 0.3;
-    branch(ex, ey, angle - spread, len * (0.6 + rng() * 0.15), depth - 1);
-    branch(ex, ey, angle + spread, len * (0.6 + rng() * 0.15), depth - 1);
-    if (rng() > 0.5 && depth > 2) branch(ex, ey, angle + (rng() - 0.5) * 0.4, len * 0.45, depth - 2);
-  }
-  ctx.lineWidth = 1.8;
-  sketchLine(x, groundY, x + (rng() - 0.5) * 4, groundY - height * 0.5, 0.5);
-  ctx.lineWidth = 1.2;
-  branch(x, groundY - height * 0.5, -Math.PI / 2, height * 0.45, 4);
-  ctx.restore();
+// ── Input ─────────────────────────────────────────────────────────────────────
+function cpos(cx,cy){ var r=canvas.getBoundingClientRect(); return{x:(cx-r.left)*(800/r.width),y:(cy-r.top)*(300/r.height)}; }
+function inB(p,b){ return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h; }
+
+function doJump(){
+  if(player.jl>0){ player.vy=JF+(player.jl===1?1.5:0); player.jl--; dust(); }
+  else if(owned.rocket&&rocketFuel>0&&!rocketOn) rocketOn=true;
 }
 
-// ── Constants ────────────────────────────────────────────────────────────────
-const GROUND = 240;
-const GRAVITY = 0.6;
-const JUMP_FORCE = -13;
-const GAME_SPEED_INIT = 4;
-const ROCKET_MAX_FUEL = 90; // frames of boost
-
-// ── Persistent state (survives between runs) ─────────────────────────────────
-let totalCoins = 0;
-let hasRocketPack = false;
-
-// ── Per-run state ────────────────────────────────────────────────────────────
-let state = 'start'; // 'start' | 'playing' | 'shop'
-let score = 0;
-let hiScore = 0;
-let frame = 0;
-let gameSpeed = GAME_SPEED_INIT;
-let coinsThisRun = 0;
-
-const player = { x: 100, y: GROUND, vy: 0, jumpsLeft: 2, legPhase: 0 };
-
-let trees = [];
-let coins = [];
-let particles = [];
-let bgTrees = [];
-let nextTree = 120;
-let nextCoin = 70;
-
-// Rocket
-let rocketActive = false;
-let rocketFuel = 0;
-
-// Shop button regions (canvas coords)
-const BTN_BUY  = { x: 290, y: 178, w: 220, h: 34 };
-const BTN_RUN  = { x: 290, y: 228, w: 220, h: 34 };
-
-// ── Reset ────────────────────────────────────────────────────────────────────
-function resetRun() {
-  player.y = GROUND; player.vy = 0; player.jumpsLeft = 2; player.legPhase = 0;
-  trees = []; coins = []; particles = [];
-  score = 0; frame = 0; gameSpeed = GAME_SPEED_INIT;
-  coinsThisRun = 0; nextTree = 120; nextCoin = 70;
-  rocketActive = false;
-  rocketFuel = hasRocketPack ? ROCKET_MAX_FUEL : 0;
-  bgTrees = [];
-  for (let i = 0; i < 12; i++) {
-    bgTrees.push({
-      x: Math.random() * 900 - 50, h: 20 + Math.random() * 30,
-      seed: Math.floor(Math.random() * 10000),
-      alpha: 0.12 + Math.random() * 0.1,
-      speed: 0.3 + Math.random() * 0.4,
-    });
-  }
+function dust(){
+  for(var i=0;i<6;i++) particles.push({x:player.x,y:G,vx:(Math.random()-.5)*3,vy:-Math.random()*2,life:1,t:'dust'});
 }
 
-// ── Input ────────────────────────────────────────────────────────────────────
-function getCanvasPos(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  return {
-    x: (clientX - rect.left) * (800 / rect.width),
-    y: (clientY - rect.top)  * (300 / rect.height),
-  };
-}
-
-function inBtn(pos, btn) {
-  return pos.x >= btn.x && pos.x <= btn.x + btn.w &&
-         pos.y >= btn.y && pos.y <= btn.y + btn.h;
-}
-
-function doJump() {
-  if (player.jumpsLeft > 0) {
-    player.vy = JUMP_FORCE + (player.jumpsLeft === 1 ? 1.5 : 0);
-    player.jumpsLeft--;
-    for (let i = 0; i < 6; i++) {
-      particles.push({ x: player.x, y: GROUND, vx: (Math.random()-0.5)*3,
-        vy: -Math.random()*2, life: 1, type: 'dust' });
+function ptr(cx,cy){
+  if(state==='start'){state='playing';resetRun();return;}
+  if(state==='playing'){doJump();return;}
+  if(state==='dying')return;
+  if(state==='shop'){
+    var p=cpos(cx,cy);
+    for(var i=0;i<ITEMS.length;i++){
+      var it=ITEMS[i];
+      if(!owned[it.id]&&totalCoins>=it.cost&&inB(p,SBTNS[i])){ totalCoins-=it.cost; owned[it.id]=true; return; }
     }
-  } else if (hasRocketPack && rocketFuel > 0 && !rocketActive) {
-    rocketActive = true;
+    if(inB(p,BRUN)){state='playing';resetRun();}
   }
 }
 
-function handlePointer(clientX, clientY) {
-  if (state === 'start')   { state = 'playing'; resetRun(); return; }
-  if (state === 'playing') { doJump(); return; }
-  if (state === 'shop') {
-    const pos = getCanvasPos(clientX, clientY);
-    if (!hasRocketPack && totalCoins >= 30 && inBtn(pos, BTN_BUY)) {
-      totalCoins -= 30;
-      hasRocketPack = true;
-      return;
-    }
-    if (inBtn(pos, BTN_RUN)) { state = 'playing'; resetRun(); }
-  }
-}
-
-document.addEventListener('keydown', e => {
-  if (e.code === 'Space' || e.code === 'ArrowUp') {
-    e.preventDefault();
-    if (state === 'start')   { state = 'playing'; resetRun(); return; }
-    if (state === 'playing') { doJump(); return; }
-    if (state === 'shop')    { state = 'playing'; resetRun(); }
-  }
-  if (state === 'shop' && (e.code === 'KeyB') && !hasRocketPack && totalCoins >= 30) {
-    totalCoins -= 30; hasRocketPack = true;
+document.addEventListener('keydown',function(e){
+  if(e.code==='Space'||e.code==='ArrowUp'){ e.preventDefault();
+    if(state==='start'){state='playing';resetRun();return;}
+    if(state==='playing'){doJump();return;}
+    if(state==='shop'){state='playing';resetRun();}
   }
 });
+canvas.addEventListener('click',function(e){ptr(e.clientX,e.clientY);});
+canvas.addEventListener('touchstart',function(e){e.preventDefault();ptr(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
 
-canvas.addEventListener('click', e => handlePointer(e.clientX, e.clientY));
-canvas.addEventListener('touchstart', e => {
-  e.preventDefault();
-  handlePointer(e.touches[0].clientX, e.touches[0].clientY);
-});
-
-// ── Spawning ─────────────────────────────────────────────────────────────────
-function spawnTree() {
-  const h = 35 + Math.random() * 45;
-  trees.push({ x: 820, h, seed: Math.floor(Math.random() * 99999), w: 14 });
-  if (Math.random() < 0.3) {
-    trees.push({ x: 820 + 30 + Math.random() * 20,
-      h: 28 + Math.random() * 30, seed: Math.floor(Math.random() * 99999), w: 10 });
-  }
-  nextTree = 80 + Math.random() * 100 - Math.min(score * 0.3, 40);
+// ── Spawn ─────────────────────────────────────────────────────────────────────
+function spawnTree(){
+  trees.push({x:820,h:35+Math.random()*45,seed:Math.floor(Math.random()*99999),dodged:false});
+  if(Math.random()<0.3) trees.push({x:855+Math.random()*20,h:28+Math.random()*30,seed:Math.floor(Math.random()*99999),dodged:false});
+  ntree=80+Math.random()*100-Math.min(score*0.3,42);
+}
+function spawnCoin(){
+  var floating=Math.random()<0.55;
+  var y=floating?G-50-Math.random()*60:G-14;
+  var count=Math.random()<0.4?3:1;
+  for(var i=0;i<count;i++) coins.push({x:830+i*22,y:y,got:false});
+  ncoin=50+Math.random()*80;
 }
 
-function spawnCoin() {
-  // spawn at a reachable height: ground level or floating
-  const floating = Math.random() < 0.55;
-  const y = floating ? GROUND - 50 - Math.random() * 60 : GROUND - 14;
-  // spawn a small cluster
-  const count = Math.random() < 0.4 ? 3 : 1;
-  for (let i = 0; i < count; i++) {
-    coins.push({ x: 830 + i * 22, y, collected: false, flash: 0 });
-  }
-  nextCoin = 55 + Math.random() * 80;
-}
+// ── Popup helper ──────────────────────────────────────────────────────────────
+function popup(txt,x,y,col){ popups.push({txt:txt,x:x,y:y,life:1.4,col:col||'#2a2a2a'}); }
 
-// ── Drawing ──────────────────────────────────────────────────────────────────
-function drawCoin(x, y) {
+// ── Draw helpers ──────────────────────────────────────────────────────────────
+function drawCoin(x,y,big){
+  var r=big?9:7;
   ctx.save();
-  ctx.strokeStyle = '#b8860b';
-  ctx.fillStyle = 'rgba(218,165,32,0.25)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(x + (Math.random()-0.5)*0.4, y + (Math.random()-0.5)*0.4, 7, 0, Math.PI*2);
-  ctx.fill();
-  ctx.stroke();
-  // $ mark
-  ctx.strokeStyle = '#8B6914';
-  ctx.lineWidth = 1;
-  sketchLine(x, y - 3, x, y + 3, 0.3);
-  sketchLine(x - 3, y - 2, x + 3, y - 2, 0.3);
-  sketchLine(x - 3, y + 2, x + 3, y + 2, 0.3);
+  if(goldenRun){ ctx.strokeStyle='#DAA520'; ctx.fillStyle='rgba(255,215,0,0.4)'; }
+  else { ctx.strokeStyle='#b8860b'; ctx.fillStyle='rgba(218,165,32,0.22)'; }
+  ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle=goldenRun?'#8B6914':'#8B6914'; ctx.lineWidth=1;
+  sk(x,y-3,x,y+3,0.3); sk(x-3,y-2,x+3,y-2,0.3); sk(x-3,y+2,x+3,y+2,0.3);
   ctx.restore();
 }
 
-function drawSketchPerson(x, y, legPhase) {
+function drawPlayer(x,y,lp){
+  ctx.save(); ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=1.8; ctx.lineCap='round';
+  var air=y<G-2, lpp=air?0:lp;
+  var sw=Math.sin(lpp)*12;
+  sk(x,y,x-6+sw,y+18,0.5); sk(x,y,x+6-sw,y+18,0.5);
+  var lean=air?-4:Math.sin(lpp*.5)*1.5;
+  sk(x+lean,y,x+lean*.3,y-18,0.5);
+  var aw=Math.sin(lpp+Math.PI)*8;
+  sk(x+lean*.5,y-14,x+lean*.5-10+aw,y-6,0.5);
+  sk(x+lean*.5,y-14,x+lean*.5+10-aw,y-6,0.5);
+  ctx.beginPath(); ctx.arc(x+lean,y-23,6,0,Math.PI*2); ctx.stroke();
+  ctx.lineWidth=2.5; ctx.strokeStyle='#444'; sk(x+lean-4,y-18,x+lean+4,y-18,0.3);
+  // Rocket pack
+  if(owned.rocket){ ctx.strokeStyle='#555'; ctx.lineWidth=1.2; ctx.strokeRect(x+lean+5,y-16,7,12); }
+  if(rocketOn){ ctx.strokeStyle='#c0392b'; ctx.lineWidth=1.5; sk(x+lean+8,y-4,x+lean+8,y+5,0.5); }
+  // Shield aura
+  if(shieldAlive){
+    ctx.strokeStyle='rgba(52,152,219,0.5)'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(x+lean,y-12,20,0,Math.PI*2); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawGround(){
+  ctx.save(); ctx.strokeStyle='#1a1a1a'; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.moveTo(0,G);
+  for(var px=0;px<820;px+=8) ctx.lineTo(px,G+Math.sin(px*.05+frame*.02)*.8+(Math.random()-.5)*.4);
+  ctx.stroke(); ctx.restore();
+}
+
+function drawHUD(){
   ctx.save();
-  ctx.strokeStyle = '#1a1a1a';
-  ctx.lineWidth = 1.8;
-  ctx.lineCap = 'round';
-  const airborne = y < GROUND - 2;
-  const lp = airborne ? 0 : legPhase;
-  const bx = x, by = y;
-  const legSwing = Math.sin(lp) * 12;
-  sketchLine(bx, by, bx - 6 + legSwing, by + 18, 0.5);
-  sketchLine(bx, by, bx + 6 - legSwing, by + 18, 0.5);
-  const lean = airborne ? -4 : Math.sin(lp * 0.5) * 1.5;
-  sketchLine(bx + lean, by, bx + lean * 0.3, by - 18, 0.5);
-  const armSwing = Math.sin(lp + Math.PI) * 8;
-  sketchLine(bx + lean * 0.5, by - 14, bx + lean * 0.5 - 10 + armSwing, by - 6, 0.5);
-  sketchLine(bx + lean * 0.5, by - 14, bx + lean * 0.5 + 10 - armSwing, by - 6, 0.5);
-  ctx.beginPath();
-  ctx.arc(bx + lean, by - 23, 6, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = '#444';
-  sketchLine(bx + lean - 4, by - 18, bx + lean + 4, by - 18, 0.3);
-  // Rocket pack on back
-  if (hasRocketPack) {
-    ctx.strokeStyle = '#555';
-    ctx.lineWidth = 1.2;
-    ctx.strokeRect(bx + lean + 5, by - 16, 7, 12);
-    if (rocketActive) {
-      ctx.strokeStyle = '#c0392b';
-      ctx.lineWidth = 1;
-      sketchLine(bx + lean + 8, by - 4, bx + lean + 8, by + 4, 0.5);
+  // Score
+  ctx.fillStyle='#1a1a1a'; ctx.font='13px Georgia'; ctx.textAlign='left';
+  ctx.fillText('Score: '+Math.floor(owned.multi?score*2:score),16,24);
+  if(hiScore>0) ctx.fillText('Best: '+Math.floor(hiScore),16,42);
+  // Coins top-right
+  ctx.textAlign='right'; ctx.fillStyle=goldenRun?'#DAA520':'#8B6914'; ctx.font='bold 13px Georgia';
+  ctx.fillText('$ '+(totalCoins+coinsRun),784,24);
+  ctx.fillStyle='#aaa'; ctx.font='11px Georgia';
+  ctx.fillText('+'+coinsRun+' this run'+(goldenRun?' ★2x':''),784,40);
+  // Combo
+  if(combo>=3){
+    ctx.textAlign='center'; ctx.fillStyle='#e67e22'; ctx.font='bold 12px Georgia';
+    ctx.fillText('COMBO x'+combo,400,22);
+  }
+  // Rocket bar
+  if(owned.rocket){
+    ctx.textAlign='left'; ctx.fillStyle='#555'; ctx.font='10px Georgia'; ctx.fillText('ROCKET',16,262);
+    ctx.strokeStyle='#888'; ctx.lineWidth=1; ctx.strokeRect(62,252,70,9);
+    var frac=rocketFuel/RF;
+    ctx.fillStyle=rocketOn?'#e74c3c':(frac>0.3?'#c0392b':'#888'); ctx.fillRect(63,253,68*frac,7);
+  }
+  // Shield indicator
+  if(owned.shield){
+    ctx.textAlign='left'; ctx.fillStyle=shieldAlive?'#3498db':'#aaa'; ctx.font='10px Georgia';
+    ctx.fillText('SHIELD '+(shieldAlive?'ON':'—'),owned.rocket?148:16,262);
+  }
+  // "Next item" nudge
+  var nextItem=null, nextCost=Infinity;
+  for(var i=0;i<ITEMS.length;i++){ if(!owned[ITEMS[i].id]&&ITEMS[i].cost<nextCost){ nextCost=ITEMS[i].cost; nextItem=ITEMS[i]; } }
+  if(nextItem){
+    var need=nextCost-(totalCoins+coinsRun);
+    if(need>0){ ctx.textAlign='right'; ctx.fillStyle='#aaa'; ctx.font='10px Georgia'; ctx.fillText(nextItem.name+': '+need+' more coins',784,262); }
+    else { ctx.textAlign='right'; ctx.fillStyle='#2ecc71'; ctx.font='bold 10px Georgia'; ctx.fillText(nextItem.name+' — ready to buy!',784,262); }
+  }
+  ctx.restore();
+}
+
+function drawShop(){
+  ctx.save();
+  ctx.fillStyle='rgba(240,236,228,0.97)'; ctx.fillRect(0,0,800,300);
+  ctx.strokeStyle='#2a2a2a'; ctx.lineWidth=1.5;
+  sk(18,18,782,18,1); sk(18,282,782,282,1); sk(18,18,18,282,1); sk(782,18,782,282,1);
+
+  // Header
+  ctx.fillStyle='#1a1a1a'; ctx.font='bold 20px Georgia'; ctx.textAlign='left';
+  ctx.fillText('SHOP',28,44);
+  ctx.fillStyle='#8B6914'; ctx.font='bold 13px Georgia'; ctx.textAlign='right';
+  ctx.fillText('$ '+totalCoins+'  (+'+coinsRun+' this run)',772,44);
+
+  // Score result
+  var finalScore=Math.floor(owned.multi?score*2:score);
+  ctx.fillStyle='#555'; ctx.font='12px Georgia';
+  ctx.fillText('Run score: '+finalScore+(finalScore>=hiScore?' — NEW BEST!':'  (Best: '+Math.floor(hiScore)+')'),772,62);
+
+  sk(24,68,776,68,0.5);
+
+  // Items
+  for(var i=0;i<ITEMS.length;i++){
+    var it=ITEMS[i], by=SBTNS[i].y, ow=owned[it.id], afford=totalCoins>=it.cost;
+    ctx.textAlign='left'; ctx.fillStyle='#1a1a1a'; ctx.font='bold 12px Georgia';
+    ctx.fillText(it.name,32,by+16);
+    ctx.fillStyle='#777'; ctx.font='10px Georgia';
+    ctx.fillText(it.lines[0],32,by+28);
+
+    ctx.textAlign='center';
+    if(ow){
+      ctx.fillStyle='#2ecc71'; ctx.font='bold 11px Georgia';
+      ctx.fillText('OWNED',SBTNS[i].x+SBTNS[i].w/2,by+18);
+    } else {
+      ctx.fillStyle=afford?'#2a2a2a':'#ccc'; ctx.fillRect(SBTNS[i].x,SBTNS[i].y,SBTNS[i].w,SBTNS[i].h);
+      ctx.fillStyle=afford?'#f0ece4':'#999'; ctx.font='11px Georgia';
+      ctx.fillText((afford?'Buy':'Need '+(it.cost-totalCoins)+' more')+' — '+it.cost,SBTNS[i].x+SBTNS[i].w/2,by+16);
     }
   }
-  ctx.restore();
-}
 
-function drawGround() {
-  ctx.save();
-  ctx.strokeStyle = '#1a1a1a';
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  ctx.moveTo(0, GROUND);
-  for (let px = 0; px < 820; px += 8) {
-    ctx.lineTo(px, GROUND + Math.sin(px * 0.05 + frame * 0.02) * 0.8 + (Math.random()-0.5)*0.4);
-  }
-  ctx.stroke();
-  ctx.restore();
-}
+  sk(24,208,776,208,0.5);
 
-function drawUI() {
-  ctx.save();
-  ctx.fillStyle = '#1a1a1a';
-  ctx.font = '13px Georgia';
-  ctx.fillText(`Score: ${Math.floor(score)}`, 16, 24);
-  if (hiScore > 0) ctx.fillText(`Best: ${Math.floor(hiScore)}`, 16, 42);
-  // Coin counter top-right
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#8B6914';
-  ctx.font = 'bold 13px Georgia';
-  ctx.fillText(`⬤ ${totalCoins + coinsThisRun}`, 784, 24);
-  ctx.fillStyle = '#aaa';
-  ctx.font = '11px Georgia';
-  ctx.fillText(`+${coinsThisRun} this run`, 784, 40);
-  // Rocket fuel bar
-  if (hasRocketPack) {
-    ctx.textAlign = 'left';
-    ctx.fillStyle = '#555';
-    ctx.font = '11px Georgia';
-    ctx.fillText('ROCKET', 16, 262);
-    ctx.strokeStyle = '#888';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(60, 252, 80, 10);
-    const frac = rocketFuel / ROCKET_MAX_FUEL;
-    ctx.fillStyle = rocketActive ? '#e74c3c' : (frac > 0.3 ? '#c0392b' : '#888');
-    ctx.fillRect(61, 253, 78 * frac, 8);
-  }
-  ctx.restore();
-}
-
-function drawShop() {
-  ctx.save();
-  // Background
-  ctx.fillStyle = 'rgba(240,236,228,0.95)';
-  ctx.fillRect(0, 0, 800, 300);
-  // Border sketch
-  ctx.strokeStyle = '#2a2a2a';
-  ctx.lineWidth = 1.5;
-  sketchLine(20, 20, 780, 20, 1);
-  sketchLine(20, 280, 780, 280, 1);
-  sketchLine(20, 20, 20, 280, 1);
-  sketchLine(780, 20, 780, 280, 1);
-
-  ctx.fillStyle = '#1a1a1a';
-  ctx.font = 'bold 22px Georgia';
-  ctx.textAlign = 'center';
-  ctx.fillText('SHOP', 400, 56);
-
-  // Coin total
-  ctx.font = '14px Georgia';
-  ctx.fillStyle = '#8B6914';
-  ctx.fillText(`Your coins: ${totalCoins}  (+${coinsThisRun} earned this run)`, 400, 88);
-
-  // Divider
-  sketchLine(100, 100, 700, 100, 0.5);
-
-  // ── Rocket Pack item ──
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#1a1a1a';
-  ctx.font = 'bold 15px Georgia';
-  ctx.fillText('Rocket Pack', 120, 130);
-  ctx.font = '12px Georgia';
-  ctx.fillStyle = '#555';
-  ctx.fillText('Press SPACE a 3rd time to blast upward!', 120, 150);
-  ctx.fillText('Fuel recharges each run.', 120, 166);
-
-  if (hasRocketPack) {
-    ctx.fillStyle = '#2ecc71';
-    ctx.font = 'bold 13px Georgia';
-    ctx.textAlign = 'right';
-    ctx.fillText('OWNED ✓', 680, 145);
-  } else {
-    // Buy button
-    const canAfford = totalCoins >= 30;
-    ctx.fillStyle = canAfford ? '#2a2a2a' : '#bbb';
-    ctx.fillRect(BTN_BUY.x, BTN_BUY.y, BTN_BUY.w, BTN_BUY.h);
-    ctx.fillStyle = canAfford ? '#f0ece4' : '#888';
-    ctx.font = '13px Georgia';
-    ctx.textAlign = 'center';
-    ctx.fillText(`Buy — 30 coins${canAfford ? '' : '  (need more coins)'}`, 400, BTN_BUY.y + 22);
+  // "So close!" message
+  if(finalScore>0&&finalScore>=hiScore-12&&finalScore<hiScore){
+    ctx.fillStyle='#e67e22'; ctx.font='bold 12px Georgia'; ctx.textAlign='center';
+    ctx.fillText('SO CLOSE! Only '+(Math.floor(hiScore)-finalScore)+' points from your best!',400,220);
   }
 
-  // Divider
-  sketchLine(100, 218, 700, 218, 0.5);
-
-  // Run Again button
-  ctx.fillStyle = '#2a2a2a';
-  ctx.fillRect(BTN_RUN.x, BTN_RUN.y, BTN_RUN.w, BTN_RUN.h);
-  ctx.fillStyle = '#f0ece4';
-  ctx.font = '13px Georgia';
-  ctx.textAlign = 'center';
-  ctx.fillText('Run Again  (or SPACE)', 400, BTN_RUN.y + 22);
+  // Run again
+  ctx.fillStyle='#1a1a1a'; ctx.fillRect(BRUN.x,BRUN.y,BRUN.w,BRUN.h);
+  ctx.fillStyle='#f0ece4'; ctx.font='13px Georgia'; ctx.textAlign='center';
+  ctx.fillText('Run Again  (SPACE)',BRUN.x+BRUN.w/2,BRUN.y+21);
 
   ctx.restore();
 }
 
-// ── Collision ────────────────────────────────────────────────────────────────
-function checkTreeCollision() {
-  const px = player.x - 8, py = player.y - 38, pw = 16, ph = 38;
-  for (const t of trees) {
-    if (px < t.x + 5 && px + pw > t.x - 5 && py < GROUND && py + ph > GROUND - t.h) return true;
+// ── Collision ─────────────────────────────────────────────────────────────────
+function treeHit(){
+  var px=player.x-8,py=player.y-38,pw=16,ph=38;
+  for(var i=0;i<trees.length;i++){
+    var t=trees[i];
+    if(px<t.x+6&&px+pw>t.x-6&&py<G&&py+ph>G-t.h) return true;
   }
   return false;
 }
-
-function checkCoinCollision() {
-  const px = player.x, py = player.y - 19; // player center
-  for (const c of coins) {
-    if (c.collected) continue;
-    if (Math.abs(px - c.x) < 14 && Math.abs(py - c.y) < 14) {
-      c.collected = true;
-      coinsThisRun++;
-      // Sparkle
-      for (let i = 0; i < 5; i++) {
-        particles.push({ x: c.x, y: c.y, vx: (Math.random()-0.5)*4,
-          vy: -Math.random()*3-1, life: 1, type: 'coin' });
-      }
+function coinHit(){
+  var px=player.x, py=player.y-19;
+  for(var i=0;i<coins.length;i++){
+    var c=coins[i]; if(c.got)continue;
+    if(Math.abs(px-c.x)<15&&Math.abs(py-c.y)<15){
+      c.got=true;
+      var val=goldenRun?2:1;
+      coinsRun+=val;
+      for(var j=0;j<5;j++) particles.push({x:c.x,y:c.y,vx:(Math.random()-.5)*4,vy:-Math.random()*3-1,life:1,t:'coin'});
+      if(goldenRun) popup('+2',c.x,c.y-10,'#DAA520');
     }
   }
 }
 
-// ── Update ───────────────────────────────────────────────────────────────────
-function update() {
-  if (state !== 'playing') return;
+// ── Update ────────────────────────────────────────────────────────────────────
+function update(){
+  // Dying state: shake then go to shop
+  if(state==='dying'){
+    deathTimer--;
+    shakeX=(Math.random()-.5)*(deathTimer/2);
+    shakeY=(Math.random()-.5)*(deathTimer/2);
+    if(deathTimer<=0){ state='shop'; shakeX=0; shakeY=0; }
+    return;
+  }
+  if(state!=='playing')return;
 
   frame++;
-  score += gameSpeed * 0.05;
-  gameSpeed = GAME_SPEED_INIT + score * 0.015;
-  player.legPhase += 0.22;
+  score+=gs*0.05;
+  gs=GS0+score*0.015;
+  if(owned.multi) gs=Math.min(gs,GS0+score*0.012); // slight cap with multiplier so it's still fair
+  player.lp+=0.22;
+
+  // Milestone check
+  if(nextMilestoneIdx<SCORE_MILESTONES.length && score>=SCORE_MILESTONES[nextMilestoneIdx]){
+    var ms=SCORE_MILESTONES[nextMilestoneIdx];
+    if(!seenMilestones[ms]){ seenMilestones[ms]=true; popup(ms+'pts!',400,60,'#8B6914'); }
+    nextMilestoneIdx++;
+  }
+
+  // Golden run trigger
+  nextGolden--;
+  if(nextGolden<=0&&!goldenRun){ goldenRun=true; goldenTimer=480; popup('★ GOLDEN RUN! ★',400,80,'#DAA520'); }
+  if(goldenRun){ goldenTimer--; if(goldenTimer<=0) goldenRun=false; }
 
   // Rocket
-  if (rocketActive) {
-    player.vy -= 1.1; // upward thrust
-    rocketFuel--;
-    // Flame particles
-    if (frame % 2 === 0) {
-      particles.push({ x: player.x + 8, y: player.y - 4,
-        vx: (Math.random()-0.5)*2, vy: 2+Math.random()*2, life: 0.7, type: 'flame' });
-    }
-    if (rocketFuel <= 0) { rocketActive = false; rocketFuel = 0; }
+  if(rocketOn){
+    player.vy-=1.1; rocketFuel--;
+    if(frame%2===0) particles.push({x:player.x+8,y:player.y-4,vx:(Math.random()-.5)*2,vy:2+Math.random()*2,life:0.7,t:'flame'});
+    if(rocketFuel<=0){rocketOn=false;rocketFuel=0;}
   }
 
   // Gravity
-  player.vy += GRAVITY;
-  player.y += player.vy;
-  if (player.y >= GROUND) {
-    player.y = GROUND; player.vy = 0; player.jumpsLeft = 2;
-    rocketActive = false;
-    // Recharge rocket a bit on landing
-    if (hasRocketPack && rocketFuel < ROCKET_MAX_FUEL) {
-      rocketFuel = Math.min(ROCKET_MAX_FUEL, rocketFuel + 18);
-    }
+  player.vy+=GV; player.y+=player.vy;
+  if(player.y>=G){
+    player.y=G; player.vy=0; player.jl=2; rocketOn=false;
+    if(owned.rocket&&rocketFuel<RF) rocketFuel=Math.min(RF,rocketFuel+18);
   }
 
   // Trees
-  nextTree--;
-  if (nextTree <= 0) spawnTree();
-  for (const t of trees) t.x -= gameSpeed;
-  trees = trees.filter(t => t.x > -30);
+  ntree--; if(ntree<=0) spawnTree();
+  for(var i=0;i<trees.length;i++){
+    trees[i].x-=gs;
+    // Combo: tree passed player without collision
+    if(!trees[i].dodged&&trees[i].x+6<player.x-8){
+      trees[i].dodged=true; combo++;
+      if(combo>maxComboRun) maxComboRun=combo;
+      if(combo%5===0){
+        var bonus=3; coinsRun+=bonus;
+        popup('COMBO x'+combo+'! +'+bonus,player.x,player.y-50,'#e67e22');
+      }
+    }
+  }
+  trees=trees.filter(function(t){return t.x>-30;});
 
   // Coins
-  nextCoin--;
-  if (nextCoin <= 0) spawnCoin();
-  for (const c of coins) c.x -= gameSpeed;
-  coins = coins.filter(c => c.x > -20);
-  checkCoinCollision();
+  ncoin--; if(ncoin<=0) spawnCoin();
+  for(var i=0;i<coins.length;i++){
+    coins[i].x-=gs;
+    // Magnet
+    if(owned.magnet&&!coins[i].got){
+      var dx=player.x-coins[i].x, dy=(player.y-19)-coins[i].y, dist=Math.sqrt(dx*dx+dy*dy);
+      if(dist<90){ coins[i].x+=dx*0.12; coins[i].y+=dy*0.12; }
+    }
+  }
+  coins=coins.filter(function(c){return c.x>-20;});
+  coinHit();
 
   // Background trees
-  for (const bt of bgTrees) {
-    bt.x -= bt.speed;
-    if (bt.x < -60) bt.x = 860 + Math.random() * 100;
-  }
+  for(var i=0;i<bgTrees.length;i++){ bgTrees[i].x-=bgTrees[i].sp; if(bgTrees[i].x<-60) bgTrees[i].x=860+Math.random()*100; }
 
   // Particles
-  for (const p of particles) {
-    p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life -= 0.05;
-  }
-  particles = particles.filter(p => p.life > 0);
+  for(var i=0;i<particles.length;i++){ var p=particles[i]; p.x+=p.vx; p.y+=p.vy; p.vy+=0.1; p.life-=0.05; }
+  particles=particles.filter(function(p){return p.life>0;});
 
-  if (checkTreeCollision()) {
-    if (score > hiScore) hiScore = score;
-    totalCoins += coinsThisRun;
-    state = 'shop';
+  // Popups
+  for(var i=0;i<popups.length;i++){ popups[i].y-=0.8; popups[i].life-=0.025; }
+  popups=popups.filter(function(p){return p.life>0;});
+
+  // Collision
+  if(treeHit()){
+    if(shieldAlive){ shieldAlive=false; combo=0; popup('SHIELD BROKEN',player.x,player.y-50,'#3498db'); }
+    else {
+      // Die
+      var finalScore=Math.floor(owned.multi?score*2:score);
+      if(finalScore>hiScore) hiScore=finalScore;
+      totalCoins+=coinsRun;
+      combo=0;
+      state='dying'; deathTimer=40;
+    }
   }
 }
 
-// ── Draw ─────────────────────────────────────────────────────────────────────
-function draw() {
-  ctx.clearRect(0, 0, 800, 300);
+// ── Draw ──────────────────────────────────────────────────────────────────────
+function draw(){
+  ctx.clearRect(0,0,800,300);
 
-  // Paper texture
+  // Screen shake transform
   ctx.save();
-  ctx.globalAlpha = 0.03;
-  for (let i = 0; i < 200; i++) {
-    ctx.fillStyle = '#555';
-    ctx.fillRect(Math.random() * 800, Math.random() * 300, 1, 1);
-  }
+  if(shakeX||shakeY) ctx.translate(shakeX,shakeY);
+
+  // Paper noise
+  ctx.save(); ctx.globalAlpha=0.025;
+  for(var i=0;i<150;i++){ctx.fillStyle='#555';ctx.fillRect(Math.random()*800,Math.random()*300,1,1);}
   ctx.restore();
 
-  // Background trees
-  for (const bt of bgTrees) {
-    ctx.save(); ctx.globalAlpha = bt.alpha;
-    drawBareTree(bt.x, GROUND, bt.h, bt.seed);
-    ctx.restore();
-  }
+  // Golden tint
+  if(goldenRun){ ctx.save(); ctx.globalAlpha=0.07; ctx.fillStyle='#DAA520'; ctx.fillRect(0,0,800,300); ctx.restore(); }
+
+  // BG trees
+  for(var i=0;i<bgTrees.length;i++){ ctx.save(); ctx.globalAlpha=bgTrees[i].a; drawTree(bgTrees[i].x,G,bgTrees[i].h,bgTrees[i].seed); ctx.restore(); }
 
   drawGround();
 
   // Coins
-  for (const c of coins) {
-    if (!c.collected) drawCoin(c.x, c.y);
-  }
+  for(var i=0;i<coins.length;i++) if(!coins[i].got) drawCoin(coins[i].x,coins[i].y,false);
 
   // Particles
   ctx.save();
-  for (const p of particles) {
-    ctx.globalAlpha = p.life;
-    if (p.type === 'dust') {
-      ctx.fillStyle = '#888';
-      ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI*2); ctx.fill();
-    } else if (p.type === 'coin') {
-      ctx.fillStyle = '#DAA520';
-      ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI*2); ctx.fill();
-    } else if (p.type === 'flame') {
-      ctx.fillStyle = p.life > 0.4 ? '#e74c3c' : '#f39c12';
-      ctx.beginPath(); ctx.arc(p.x, p.y, 3 * p.life, 0, Math.PI*2); ctx.fill();
-    }
+  for(var i=0;i<particles.length;i++){
+    var p=particles[i]; ctx.globalAlpha=p.life;
+    if(p.t==='dust'){ctx.fillStyle='#888';ctx.beginPath();ctx.arc(p.x,p.y,2,0,Math.PI*2);ctx.fill();}
+    else if(p.t==='coin'){ctx.fillStyle=goldenRun?'#FFD700':'#DAA520';ctx.beginPath();ctx.arc(p.x,p.y,3,0,Math.PI*2);ctx.fill();}
+    else if(p.t==='flame'){ctx.fillStyle=p.life>0.4?'#e74c3c':'#f39c12';ctx.beginPath();ctx.arc(p.x,p.y,3*p.life,0,Math.PI*2);ctx.fill();}
   }
   ctx.restore();
 
   // Obstacle trees
-  for (const t of trees) drawBareTree(t.x, GROUND, t.h, t.seed);
+  for(var i=0;i<trees.length;i++) drawTree(trees[i].x,G,trees[i].h,trees[i].seed);
 
-  // Player
-  if (state === 'playing') drawSketchPerson(player.x, player.y, player.legPhase);
+  // Player (draw even during dying for the shake effect)
+  if(state==='playing'||state==='dying') drawPlayer(player.x,player.y,player.lp);
 
-  drawUI();
+  // Popups
+  ctx.save();
+  for(var i=0;i<popups.length;i++){
+    var pp=popups[i]; ctx.globalAlpha=Math.min(1,pp.life*2);
+    ctx.fillStyle=pp.col; ctx.font='bold 13px Georgia'; ctx.textAlign='center';
+    ctx.fillText(pp.txt,pp.x,pp.y);
+  }
+  ctx.restore();
 
-  if (state === 'start') {
+  drawHUD();
+  ctx.restore(); // end shake transform
+
+  // Overlays (not affected by shake)
+  if(state==='start'){
     ctx.save();
-    ctx.fillStyle = 'rgba(240,236,228,0.85)';
-    ctx.fillRect(0, 0, 800, 300);
-    ctx.fillStyle = '#1a1a1a';
-    ctx.font = 'bold 26px Georgia';
-    ctx.textAlign = 'center';
-    ctx.fillText('WINTER RUNNER', 400, 125);
-    ctx.font = '14px Georgia';
-    ctx.fillStyle = '#555';
-    ctx.fillText('Press SPACE or tap to begin', 400, 155);
+    ctx.fillStyle='rgba(240,236,228,0.88)'; ctx.fillRect(0,0,800,300);
+    ctx.fillStyle='#1a1a1a'; ctx.font='bold 26px Georgia'; ctx.textAlign='center';
+    ctx.fillText('WINTER RUNNER',400,115);
+    ctx.font='13px Georgia'; ctx.fillStyle='#555';
+    ctx.fillText('Collect coins. Buy upgrades. Go further.',400,145);
+    ctx.fillText('Tap or press SPACE to begin',400,170);
     ctx.restore();
   }
-
-  if (state === 'shop') drawShop();
+  if(state==='shop'||state==='dying') drawShop();
 }
 
-// ── Loop ─────────────────────────────────────────────────────────────────────
-function loop() { update(); draw(); requestAnimationFrame(loop); }
+// ── Loop ──────────────────────────────────────────────────────────────────────
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
 resetRun();
 loop();
 </script>
