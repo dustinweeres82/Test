@@ -29,6 +29,7 @@
     background: #f0ece4;
     image-rendering: crisp-edges;
     box-shadow: 3px 3px 0 #2a2a2a;
+    touch-action: none;
   }
   #info {
     margin-top: 10px;
@@ -47,7 +48,7 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
-// --- Sketch helpers ---
+// ── Sketch helpers ───────────────────────────────────────────────────────────
 function sketchLine(x1, y1, x2, y2, wobble = 1.2) {
   ctx.beginPath();
   ctx.moveTo(x1 + (Math.random() - 0.5) * wobble, y1 + (Math.random() - 0.5) * wobble);
@@ -55,14 +56,21 @@ function sketchLine(x1, y1, x2, y2, wobble = 1.2) {
   ctx.stroke();
 }
 
-// Draw a bare winter tree (like in the image)
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
 function drawBareTree(x, groundY, height, seed) {
   const rng = mulberry32(seed);
   ctx.save();
   ctx.strokeStyle = '#1a1a1a';
   ctx.lineWidth = 1.2;
   ctx.lineCap = 'round';
-
   function branch(bx, by, angle, len, depth) {
     if (depth === 0 || len < 3) return;
     const ex = bx + Math.cos(angle) * len;
@@ -71,69 +79,63 @@ function drawBareTree(x, groundY, height, seed) {
     const spread = 0.4 + rng() * 0.3;
     branch(ex, ey, angle - spread, len * (0.6 + rng() * 0.15), depth - 1);
     branch(ex, ey, angle + spread, len * (0.6 + rng() * 0.15), depth - 1);
-    if (rng() > 0.5 && depth > 2) {
-      branch(ex, ey, angle + (rng() - 0.5) * 0.4, len * 0.45, depth - 2);
-    }
+    if (rng() > 0.5 && depth > 2) branch(ex, ey, angle + (rng() - 0.5) * 0.4, len * 0.45, depth - 2);
   }
-
   ctx.lineWidth = 1.8;
   sketchLine(x, groundY, x + (rng() - 0.5) * 4, groundY - height * 0.5, 0.5);
   ctx.lineWidth = 1.2;
   branch(x, groundY - height * 0.5, -Math.PI / 2, height * 0.45, 4);
-
   ctx.restore();
 }
 
-// Mulberry32 seeded RNG for deterministic trees
-function mulberry32(seed) {
-  return function() {
-    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
-    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-
-// --- Game state ---
+// ── Constants ────────────────────────────────────────────────────────────────
 const GROUND = 240;
 const GRAVITY = 0.6;
 const JUMP_FORCE = -13;
 const GAME_SPEED_INIT = 4;
+const ROCKET_MAX_FUEL = 90; // frames of boost
 
-let state = 'start'; // 'start', 'playing', 'dead'
+// ── Persistent state (survives between runs) ─────────────────────────────────
+let totalCoins = 0;
+let hasRocketPack = false;
+
+// ── Per-run state ────────────────────────────────────────────────────────────
+let state = 'start'; // 'start' | 'playing' | 'shop'
 let score = 0;
 let hiScore = 0;
 let frame = 0;
 let gameSpeed = GAME_SPEED_INIT;
+let coinsThisRun = 0;
 
-const player = {
-  x: 100, y: GROUND,
-  vy: 0,
-  jumpsLeft: 2,
-  w: 22, h: 38,
-  legPhase: 0,
-};
+const player = { x: 100, y: GROUND, vy: 0, jumpsLeft: 2, legPhase: 0 };
 
 let trees = [];
-let groundSeeds = [];
+let coins = [];
 let particles = [];
 let bgTrees = [];
+let nextTree = 120;
+let nextCoin = 70;
 
-function resetGame() {
-  player.y = GROUND;
-  player.vy = 0;
-  player.jumpsLeft = 2;
-  trees = [];
-  particles = [];
-  score = 0;
-  frame = 0;
-  gameSpeed = GAME_SPEED_INIT;
-  // Pre-generate background trees
+// Rocket
+let rocketActive = false;
+let rocketFuel = 0;
+
+// Shop button regions (canvas coords)
+const BTN_BUY  = { x: 290, y: 178, w: 220, h: 34 };
+const BTN_RUN  = { x: 290, y: 228, w: 220, h: 34 };
+
+// ── Reset ────────────────────────────────────────────────────────────────────
+function resetRun() {
+  player.y = GROUND; player.vy = 0; player.jumpsLeft = 2; player.legPhase = 0;
+  trees = []; coins = []; particles = [];
+  score = 0; frame = 0; gameSpeed = GAME_SPEED_INIT;
+  coinsThisRun = 0; nextTree = 120; nextCoin = 70;
+  rocketActive = false;
+  rocketFuel = hasRocketPack ? ROCKET_MAX_FUEL : 0;
   bgTrees = [];
   for (let i = 0; i < 12; i++) {
     bgTrees.push({
-      x: Math.random() * 900 - 50,
-      h: 20 + Math.random() * 30,
+      x: Math.random() * 900 - 50, h: 20 + Math.random() * 30,
       seed: Math.floor(Math.random() * 10000),
       alpha: 0.12 + Math.random() * 0.1,
       speed: 0.3 + Math.random() * 0.4,
@@ -141,95 +143,140 @@ function resetGame() {
   }
 }
 
-function jump() {
-  if (state === 'start') {
-    state = 'playing';
-    resetGame();
-    return;
-  }
-  if (state === 'dead') {
-    if (score > hiScore) hiScore = score;
-    state = 'playing';
-    resetGame();
-    return;
-  }
+// ── Input ────────────────────────────────────────────────────────────────────
+function getCanvasPos(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) * (800 / rect.width),
+    y: (clientY - rect.top)  * (300 / rect.height),
+  };
+}
+
+function inBtn(pos, btn) {
+  return pos.x >= btn.x && pos.x <= btn.x + btn.w &&
+         pos.y >= btn.y && pos.y <= btn.y + btn.h;
+}
+
+function doJump() {
   if (player.jumpsLeft > 0) {
     player.vy = JUMP_FORCE + (player.jumpsLeft === 1 ? 1.5 : 0);
     player.jumpsLeft--;
-    // Dust particles
     for (let i = 0; i < 6; i++) {
-      particles.push({
-        x: player.x, y: GROUND,
-        vx: (Math.random() - 0.5) * 3,
-        vy: -Math.random() * 2,
-        life: 1,
-      });
+      particles.push({ x: player.x, y: GROUND, vx: (Math.random()-0.5)*3,
+        vy: -Math.random()*2, life: 1, type: 'dust' });
     }
+  } else if (hasRocketPack && rocketFuel > 0 && !rocketActive) {
+    rocketActive = true;
   }
 }
 
-// Input
+function handlePointer(clientX, clientY) {
+  if (state === 'start')   { state = 'playing'; resetRun(); return; }
+  if (state === 'playing') { doJump(); return; }
+  if (state === 'shop') {
+    const pos = getCanvasPos(clientX, clientY);
+    if (!hasRocketPack && totalCoins >= 30 && inBtn(pos, BTN_BUY)) {
+      totalCoins -= 30;
+      hasRocketPack = true;
+      return;
+    }
+    if (inBtn(pos, BTN_RUN)) { state = 'playing'; resetRun(); }
+  }
+}
+
 document.addEventListener('keydown', e => {
-  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); }
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    e.preventDefault();
+    if (state === 'start')   { state = 'playing'; resetRun(); return; }
+    if (state === 'playing') { doJump(); return; }
+    if (state === 'shop')    { state = 'playing'; resetRun(); }
+  }
+  if (state === 'shop' && (e.code === 'KeyB') && !hasRocketPack && totalCoins >= 30) {
+    totalCoins -= 30; hasRocketPack = true;
+  }
 });
-canvas.addEventListener('click', jump);
-canvas.addEventListener('touchstart', e => { e.preventDefault(); jump(); });
 
-// Tree spawning intervals
-let nextTree = 120;
+canvas.addEventListener('click', e => handlePointer(e.clientX, e.clientY));
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  handlePointer(e.touches[0].clientX, e.touches[0].clientY);
+});
 
+// ── Spawning ─────────────────────────────────────────────────────────────────
 function spawnTree() {
   const h = 35 + Math.random() * 45;
-  trees.push({
-    x: 820,
-    h,
-    seed: Math.floor(Math.random() * 99999),
-    w: 14,
-  });
-  // cluster chance
+  trees.push({ x: 820, h, seed: Math.floor(Math.random() * 99999), w: 14 });
   if (Math.random() < 0.3) {
-    trees.push({
-      x: 820 + 30 + Math.random() * 20,
-      h: 28 + Math.random() * 30,
-      seed: Math.floor(Math.random() * 99999),
-      w: 10,
-    });
+    trees.push({ x: 820 + 30 + Math.random() * 20,
+      h: 28 + Math.random() * 30, seed: Math.floor(Math.random() * 99999), w: 10 });
   }
   nextTree = 80 + Math.random() * 100 - Math.min(score * 0.3, 40);
+}
+
+function spawnCoin() {
+  // spawn at a reachable height: ground level or floating
+  const floating = Math.random() < 0.55;
+  const y = floating ? GROUND - 50 - Math.random() * 60 : GROUND - 14;
+  // spawn a small cluster
+  const count = Math.random() < 0.4 ? 3 : 1;
+  for (let i = 0; i < count; i++) {
+    coins.push({ x: 830 + i * 22, y, collected: false, flash: 0 });
+  }
+  nextCoin = 55 + Math.random() * 80;
+}
+
+// ── Drawing ──────────────────────────────────────────────────────────────────
+function drawCoin(x, y) {
+  ctx.save();
+  ctx.strokeStyle = '#b8860b';
+  ctx.fillStyle = 'rgba(218,165,32,0.25)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(x + (Math.random()-0.5)*0.4, y + (Math.random()-0.5)*0.4, 7, 0, Math.PI*2);
+  ctx.fill();
+  ctx.stroke();
+  // $ mark
+  ctx.strokeStyle = '#8B6914';
+  ctx.lineWidth = 1;
+  sketchLine(x, y - 3, x, y + 3, 0.3);
+  sketchLine(x - 3, y - 2, x + 3, y - 2, 0.3);
+  sketchLine(x - 3, y + 2, x + 3, y + 2, 0.3);
+  ctx.restore();
 }
 
 function drawSketchPerson(x, y, legPhase) {
   ctx.save();
   ctx.strokeStyle = '#1a1a1a';
-  ctx.fillStyle = '#1a1a1a';
   ctx.lineWidth = 1.8;
   ctx.lineCap = 'round';
-
   const airborne = y < GROUND - 2;
   const lp = airborne ? 0 : legPhase;
-
-  // Body
   const bx = x, by = y;
-  // Legs
   const legSwing = Math.sin(lp) * 12;
-  sketchLine(bx, by, bx - 6 + legSwing, by + 18, 0.5);    // front leg
-  sketchLine(bx, by, bx + 6 - legSwing, by + 18, 0.5);    // back leg
-  // Torso
+  sketchLine(bx, by, bx - 6 + legSwing, by + 18, 0.5);
+  sketchLine(bx, by, bx + 6 - legSwing, by + 18, 0.5);
   const lean = airborne ? -4 : Math.sin(lp * 0.5) * 1.5;
   sketchLine(bx + lean, by, bx + lean * 0.3, by - 18, 0.5);
-  // Arms
   const armSwing = Math.sin(lp + Math.PI) * 8;
   sketchLine(bx + lean * 0.5, by - 14, bx + lean * 0.5 - 10 + armSwing, by - 6, 0.5);
   sketchLine(bx + lean * 0.5, by - 14, bx + lean * 0.5 + 10 - armSwing, by - 6, 0.5);
-  // Head
   ctx.beginPath();
   ctx.arc(bx + lean, by - 23, 6, 0, Math.PI * 2);
   ctx.stroke();
-  // Scarf detail
   ctx.lineWidth = 2.5;
   ctx.strokeStyle = '#444';
   sketchLine(bx + lean - 4, by - 18, bx + lean + 4, by - 18, 0.3);
-
+  // Rocket pack on back
+  if (hasRocketPack) {
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(bx + lean + 5, by - 16, 7, 12);
+    if (rocketActive) {
+      ctx.strokeStyle = '#c0392b';
+      ctx.lineWidth = 1;
+      sketchLine(bx + lean + 8, by - 4, bx + lean + 8, by + 4, 0.5);
+    }
+  }
   ctx.restore();
 }
 
@@ -237,11 +284,10 @@ function drawGround() {
   ctx.save();
   ctx.strokeStyle = '#1a1a1a';
   ctx.lineWidth = 1.2;
-  // Slightly wobbly ground line
   ctx.beginPath();
   ctx.moveTo(0, GROUND);
   for (let px = 0; px < 820; px += 8) {
-    ctx.lineTo(px, GROUND + Math.sin(px * 0.05 + frame * 0.02) * 0.8 + (Math.random() - 0.5) * 0.4);
+    ctx.lineTo(px, GROUND + Math.sin(px * 0.05 + frame * 0.02) * 0.8 + (Math.random()-0.5)*0.4);
   }
   ctx.stroke();
   ctx.restore();
@@ -251,40 +297,124 @@ function drawUI() {
   ctx.save();
   ctx.fillStyle = '#1a1a1a';
   ctx.font = '13px Georgia';
-  ctx.letterSpacing = '2px';
   ctx.fillText(`Score: ${Math.floor(score)}`, 16, 24);
   if (hiScore > 0) ctx.fillText(`Best: ${Math.floor(hiScore)}`, 16, 42);
+  // Coin counter top-right
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#8B6914';
+  ctx.font = 'bold 13px Georgia';
+  ctx.fillText(`⬤ ${totalCoins + coinsThisRun}`, 784, 24);
+  ctx.fillStyle = '#aaa';
+  ctx.font = '11px Georgia';
+  ctx.fillText(`+${coinsThisRun} this run`, 784, 40);
+  // Rocket fuel bar
+  if (hasRocketPack) {
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#555';
+    ctx.font = '11px Georgia';
+    ctx.fillText('ROCKET', 16, 262);
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(60, 252, 80, 10);
+    const frac = rocketFuel / ROCKET_MAX_FUEL;
+    ctx.fillStyle = rocketActive ? '#e74c3c' : (frac > 0.3 ? '#c0392b' : '#888');
+    ctx.fillRect(61, 253, 78 * frac, 8);
+  }
   ctx.restore();
 }
 
-function drawOverlay(msg, sub) {
+function drawShop() {
   ctx.save();
-  ctx.fillStyle = 'rgba(240,236,228,0.82)';
+  // Background
+  ctx.fillStyle = 'rgba(240,236,228,0.95)';
   ctx.fillRect(0, 0, 800, 300);
+  // Border sketch
+  ctx.strokeStyle = '#2a2a2a';
+  ctx.lineWidth = 1.5;
+  sketchLine(20, 20, 780, 20, 1);
+  sketchLine(20, 280, 780, 280, 1);
+  sketchLine(20, 20, 20, 280, 1);
+  sketchLine(780, 20, 780, 280, 1);
+
   ctx.fillStyle = '#1a1a1a';
-  ctx.font = 'bold 26px Georgia';
+  ctx.font = 'bold 22px Georgia';
   ctx.textAlign = 'center';
-  ctx.fillText(msg, 400, 130);
+  ctx.fillText('SHOP', 400, 56);
+
+  // Coin total
   ctx.font = '14px Georgia';
+  ctx.fillStyle = '#8B6914';
+  ctx.fillText(`Your coins: ${totalCoins}  (+${coinsThisRun} earned this run)`, 400, 88);
+
+  // Divider
+  sketchLine(100, 100, 700, 100, 0.5);
+
+  // ── Rocket Pack item ──
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#1a1a1a';
+  ctx.font = 'bold 15px Georgia';
+  ctx.fillText('Rocket Pack', 120, 130);
+  ctx.font = '12px Georgia';
   ctx.fillStyle = '#555';
-  ctx.fillText(sub, 400, 160);
+  ctx.fillText('Press SPACE a 3rd time to blast upward!', 120, 150);
+  ctx.fillText('Fuel recharges each run.', 120, 166);
+
+  if (hasRocketPack) {
+    ctx.fillStyle = '#2ecc71';
+    ctx.font = 'bold 13px Georgia';
+    ctx.textAlign = 'right';
+    ctx.fillText('OWNED ✓', 680, 145);
+  } else {
+    // Buy button
+    const canAfford = totalCoins >= 30;
+    ctx.fillStyle = canAfford ? '#2a2a2a' : '#bbb';
+    ctx.fillRect(BTN_BUY.x, BTN_BUY.y, BTN_BUY.w, BTN_BUY.h);
+    ctx.fillStyle = canAfford ? '#f0ece4' : '#888';
+    ctx.font = '13px Georgia';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Buy — 30 coins${canAfford ? '' : '  (need more coins)'}`, 400, BTN_BUY.y + 22);
+  }
+
+  // Divider
+  sketchLine(100, 218, 700, 218, 0.5);
+
+  // Run Again button
+  ctx.fillStyle = '#2a2a2a';
+  ctx.fillRect(BTN_RUN.x, BTN_RUN.y, BTN_RUN.w, BTN_RUN.h);
+  ctx.fillStyle = '#f0ece4';
+  ctx.font = '13px Georgia';
+  ctx.textAlign = 'center';
+  ctx.fillText('Run Again  (or SPACE)', 400, BTN_RUN.y + 22);
+
   ctx.restore();
 }
 
-// Collision (axis-aligned box vs tree trunk)
-function checkCollision() {
-  const px = player.x - 8, py = player.y - 38;
-  const pw = 16, ph = 38;
+// ── Collision ────────────────────────────────────────────────────────────────
+function checkTreeCollision() {
+  const px = player.x - 8, py = player.y - 38, pw = 16, ph = 38;
   for (const t of trees) {
-    const tx = t.x - 5, ty = GROUND - t.h;
-    const tw = 10, th = t.h;
-    if (px < tx + tw && px + pw > tx && py < ty + th && py + ph > ty) {
-      return true;
-    }
+    if (px < t.x + 5 && px + pw > t.x - 5 && py < GROUND && py + ph > GROUND - t.h) return true;
   }
   return false;
 }
 
+function checkCoinCollision() {
+  const px = player.x, py = player.y - 19; // player center
+  for (const c of coins) {
+    if (c.collected) continue;
+    if (Math.abs(px - c.x) < 14 && Math.abs(py - c.y) < 14) {
+      c.collected = true;
+      coinsThisRun++;
+      // Sparkle
+      for (let i = 0; i < 5; i++) {
+        particles.push({ x: c.x, y: c.y, vx: (Math.random()-0.5)*4,
+          vy: -Math.random()*3-1, life: 1, type: 'coin' });
+      }
+    }
+  }
+}
+
+// ── Update ───────────────────────────────────────────────────────────────────
 function update() {
   if (state !== 'playing') return;
 
@@ -293,13 +423,28 @@ function update() {
   gameSpeed = GAME_SPEED_INIT + score * 0.015;
   player.legPhase += 0.22;
 
+  // Rocket
+  if (rocketActive) {
+    player.vy -= 1.1; // upward thrust
+    rocketFuel--;
+    // Flame particles
+    if (frame % 2 === 0) {
+      particles.push({ x: player.x + 8, y: player.y - 4,
+        vx: (Math.random()-0.5)*2, vy: 2+Math.random()*2, life: 0.7, type: 'flame' });
+    }
+    if (rocketFuel <= 0) { rocketActive = false; rocketFuel = 0; }
+  }
+
   // Gravity
   player.vy += GRAVITY;
   player.y += player.vy;
   if (player.y >= GROUND) {
-    player.y = GROUND;
-    player.vy = 0;
-    player.jumpsLeft = 2;
+    player.y = GROUND; player.vy = 0; player.jumpsLeft = 2;
+    rocketActive = false;
+    // Recharge rocket a bit on landing
+    if (hasRocketPack && rocketFuel < ROCKET_MAX_FUEL) {
+      rocketFuel = Math.min(ROCKET_MAX_FUEL, rocketFuel + 18);
+    }
   }
 
   // Trees
@@ -307,6 +452,13 @@ function update() {
   if (nextTree <= 0) spawnTree();
   for (const t of trees) t.x -= gameSpeed;
   trees = trees.filter(t => t.x > -30);
+
+  // Coins
+  nextCoin--;
+  if (nextCoin <= 0) spawnCoin();
+  for (const c of coins) c.x -= gameSpeed;
+  coins = coins.filter(c => c.x > -20);
+  checkCoinCollision();
 
   // Background trees
   for (const bt of bgTrees) {
@@ -320,15 +472,18 @@ function update() {
   }
   particles = particles.filter(p => p.life > 0);
 
-  if (checkCollision()) {
-    state = 'dead';
+  if (checkTreeCollision()) {
+    if (score > hiScore) hiScore = score;
+    totalCoins += coinsThisRun;
+    state = 'shop';
   }
 }
 
+// ── Draw ─────────────────────────────────────────────────────────────────────
 function draw() {
   ctx.clearRect(0, 0, 800, 300);
 
-  // Faint background texture
+  // Paper texture
   ctx.save();
   ctx.globalAlpha = 0.03;
   for (let i = 0; i < 200; i++) {
@@ -337,56 +492,65 @@ function draw() {
   }
   ctx.restore();
 
-  // Background trees (faint)
+  // Background trees
   for (const bt of bgTrees) {
-    ctx.save();
-    ctx.globalAlpha = bt.alpha;
+    ctx.save(); ctx.globalAlpha = bt.alpha;
     drawBareTree(bt.x, GROUND, bt.h, bt.seed);
     ctx.restore();
   }
 
   drawGround();
 
+  // Coins
+  for (const c of coins) {
+    if (!c.collected) drawCoin(c.x, c.y);
+  }
+
   // Particles
   ctx.save();
   for (const p of particles) {
-    ctx.globalAlpha = p.life * 0.7;
-    ctx.fillStyle = '#555';
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.globalAlpha = p.life;
+    if (p.type === 'dust') {
+      ctx.fillStyle = '#888';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI*2); ctx.fill();
+    } else if (p.type === 'coin') {
+      ctx.fillStyle = '#DAA520';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI*2); ctx.fill();
+    } else if (p.type === 'flame') {
+      ctx.fillStyle = p.life > 0.4 ? '#e74c3c' : '#f39c12';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 3 * p.life, 0, Math.PI*2); ctx.fill();
+    }
   }
   ctx.restore();
 
   // Obstacle trees
-  for (const t of trees) {
-    drawBareTree(t.x, GROUND, t.h, t.seed);
-  }
+  for (const t of trees) drawBareTree(t.x, GROUND, t.h, t.seed);
 
   // Player
-  if (state === 'playing' || state === 'dead') {
-    drawSketchPerson(player.x, player.y, player.legPhase);
-  }
+  if (state === 'playing') drawSketchPerson(player.x, player.y, player.legPhase);
 
   drawUI();
 
   if (state === 'start') {
-    drawOverlay('WINTER RUNNER', 'Press SPACE or tap to begin');
-  } else if (state === 'dead') {
-    drawOverlay(
-      `Score: ${Math.floor(score)}`,
-      `${score > hiScore ? 'New best! ' : ''}Press SPACE to run again`
-    );
+    ctx.save();
+    ctx.fillStyle = 'rgba(240,236,228,0.85)';
+    ctx.fillRect(0, 0, 800, 300);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.font = 'bold 26px Georgia';
+    ctx.textAlign = 'center';
+    ctx.fillText('WINTER RUNNER', 400, 125);
+    ctx.font = '14px Georgia';
+    ctx.fillStyle = '#555';
+    ctx.fillText('Press SPACE or tap to begin', 400, 155);
+    ctx.restore();
   }
+
+  if (state === 'shop') drawShop();
 }
 
-function loop() {
-  update();
-  draw();
-  requestAnimationFrame(loop);
-}
-
-resetGame();
+// ── Loop ─────────────────────────────────────────────────────────────────────
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+resetRun();
 loop();
 </script>
 </body>
