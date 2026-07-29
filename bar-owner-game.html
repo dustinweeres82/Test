@@ -187,18 +187,6 @@
     gap: 3px;
     max-width: 100px;
   }
-  .patience-track {
-    height: 6px;
-    width: 90%;
-    margin: 2px auto 0;
-    background: rgba(0,0,0,0.4);
-    border-radius: 4px;
-    overflow: hidden;
-  }
-  .patience-fill {
-    height: 100%;
-    background: var(--good);
-  }
   .table-empty-label {
     font-size: 0.68em;
     color: #cbb896;
@@ -386,7 +374,7 @@
 <div id="app">
   <div class="sign">
     <h1>🍸 The Rusty Tap 🍺</h1>
-    <p>YOU'RE THE OWNER. YOU'RE THE BARTENDER. DON'T KEEP 'EM WAITING.</p>
+    <p>YOU'RE THE OWNER. YOU'RE THE BARTENDER. TAKE YOUR TIME AND POUR IT RIGHT.</p>
   </div>
 
   <div class="stats-bar">
@@ -429,14 +417,13 @@
 <div class="modal-overlay" id="start-modal">
   <div class="modal">
     <h2>Welcome to The Rusty Tap</h2>
-    <p>You've just taken over the neighborhood dive bar. Tables will fill up with customers — read their order bubble, then work the floor:</p>
+    <p>You've just taken over the neighborhood dive bar. Tables will fill up with customers — read their order bubble, then work the floor at your own pace:</p>
     <ul>
       <li>🧉 Walk to the <b>Till</b> and click ingredients to prepare a drink</li>
       <li>🧺 Your tray holds a <b>maximum of 3 drinks</b> at once</li>
       <li>🚶 Tap the matching table to walk over and deliver it automatically</li>
-      <li>✅ Fast delivery → cash + tip, reputation up</li>
-      <li>❌ A customer walking out → reputation down</li>
-      <li>💀 Reputation hits zero → you're shut down</li>
+      <li>🙂 Customers wait patiently — no clock, no rush</li>
+      <li>✅ Every drink delivered → cash + tip, reputation up</li>
     </ul>
     <button class="big-btn" id="start-btn">Open the Bar</button>
   </div>
@@ -448,16 +435,6 @@
     <h2 id="day-modal-title">Last Call!</h2>
     <div id="day-summary"></div>
     <button class="big-btn" id="next-day-btn">Start Next Day</button>
-  </div>
-</div>
-
-<!-- Game Over Modal -->
-<div class="modal-overlay hidden" id="gameover-modal">
-  <div class="modal">
-    <h2>🔒 The Rusty Tap Has Closed</h2>
-    <p>Word got around about bad service, and the regulars stopped coming. The bank called in the lease.</p>
-    <div id="gameover-summary"></div>
-    <button class="big-btn" id="restart-btn">Try Again</button>
   </div>
 </div>
 
@@ -516,7 +493,7 @@
         id: "table-" + i,
         xPct: pos.xPct,
         yPct: pos.yPct,
-        customer: null,     // {id, name, avatar, drinkKey, patience, patienceMax}
+        customer: null,     // {id, name, avatar, drinkKey}
       })),
       tray: [],             // array of {drinkKey}
       mix: [],              // array of ingredient keys, in click order
@@ -529,11 +506,8 @@
       nextSpawnAt: 2000,
       dayEarnings: 0,
       dayTips: 0,
-      dayMissed: 0,
-      dayWrong: 0,
       running: false,
       dayOver: false,
-      gameOver: false,
       idCounter: 1,
     };
   }
@@ -567,11 +541,6 @@
   // ---------------------------------------------------------------------
   // Difficulty helpers
   // ---------------------------------------------------------------------
-  function patienceForDay(ingCount) {
-    const base = Math.max(17000 - (state.day - 1) * 900, 10000);
-    return base + ingCount * 1700;
-  }
-
   function spawnIntervalRange() {
     const lo = Math.max(2600 - state.day * 120, 1200);
     const hi = Math.max(5200 - state.day * 150, 2200);
@@ -588,15 +557,11 @@
   function seatCustomer(table) {
     const keys = unlockedDrinkKeys();
     const drinkKey = keys[Math.floor(Math.random() * keys.length)];
-    const drink = DRINKS[drinkKey];
-    const patienceMax = patienceForDay(drink.ing.length);
     table.customer = {
       id: state.idCounter++,
       name: CUSTOMER_NAMES[Math.floor(Math.random() * CUSTOMER_NAMES.length)],
       avatar: CUSTOMER_AVATARS[Math.floor(Math.random() * CUSTOMER_AVATARS.length)],
       drinkKey,
-      patience: patienceMax,
-      patienceMax,
     };
     state.customersSpawned++;
   }
@@ -627,18 +592,6 @@
       }
     }
 
-    // Patience countdown for every occupied table
-    let anyTimeout = false;
-    state.tables.forEach(table => {
-      if (!table.customer) return;
-      table.customer.patience -= dt;
-      if (table.customer.patience <= 0) {
-        table.customer.patience = 0;
-        anyTimeout = true;
-        customerLeaves(table);
-      }
-    });
-
     // Movement
     if (state.moving && state.target) {
       const floorEl = document.getElementById("floor");
@@ -665,18 +618,8 @@
     }
 
     renderPlayerPos();
-    updatePatienceBars();
-    if (anyTimeout) render();
     checkDayEnd();
     requestAnimationFrame(tick);
-  }
-
-  function customerLeaves(table) {
-    const customer = table.customer;
-    table.customer = null;
-    adjustReputation(-10);
-    state.dayMissed++;
-    toast(`${customer.name} walked out without a drink!`, "bad");
   }
 
   function checkDayEnd() {
@@ -690,9 +633,6 @@
   // ---------------------------------------------------------------------
   function adjustReputation(delta) {
     state.reputation = Math.max(0, Math.min(100, state.reputation + delta));
-    if (state.reputation <= 0) {
-      triggerGameOver();
-    }
   }
 
   function repStars() {
@@ -751,14 +691,13 @@
     }
     const customer = table.customer;
     const drink = DRINKS[customer.drinkKey];
-    const patienceFrac = customer.patience / customer.patienceMax;
-    const tip = Math.round(drink.price * 0.6 * patienceFrac);
+    const tip = Math.round(drink.price * (0.15 + Math.random() * 0.25));
     const total = drink.price + tip;
     state.money += total;
     state.dayEarnings += drink.price;
     state.dayTips += tip;
     state.customersServed++;
-    adjustReputation(patienceFrac > 0.5 ? 3 : 1);
+    adjustReputation(2);
     toast(`${customer.name} loved the ${drink.name}! +$${total}`, "good");
     state.tray.splice(idx, 1);
     table.customer = null;
@@ -821,8 +760,6 @@
     state.spawnTimer = 0;
     state.dayEarnings = 0;
     state.dayTips = 0;
-    state.dayMissed = 0;
-    state.dayWrong = 0;
     document.getElementById("start-modal").classList.add("hidden");
     document.getElementById("day-modal").classList.add("hidden");
     render();
@@ -849,7 +786,6 @@
       <div class="summary-line"><span>🧑‍🤝‍🧑 Customers served</span><span>${state.customersServed}</span></div>
       <div class="summary-line"><span>💵 Drink sales</span><span>$${state.dayEarnings}</span></div>
       <div class="summary-line"><span>💰 Tips earned</span><span>$${state.dayTips}</span></div>
-      <div class="summary-line"><span>🚪 Walked out</span><span>${state.dayMissed}</span></div>
       <div class="summary-line"><span>⭐ Reputation</span><span>${repStars()} (${state.reputation}/100)</span></div>
       ${unlockHtml}
     `;
@@ -861,26 +797,6 @@
     startDay();
   }
 
-  function triggerGameOver() {
-    state.running = false;
-    state.gameOver = true;
-    const summary = document.getElementById("gameover-summary");
-    summary.innerHTML = `
-      <div class="summary-line"><span>📅 Days survived</span><span>${state.day}</span></div>
-      <div class="summary-line"><span>💵 Final cash</span><span>$${state.money}</span></div>
-      <div class="summary-line"><span>🧑‍🤝‍🧑 Total served</span><span>${state.customersServed}</span></div>
-    `;
-    document.getElementById("day-modal").classList.add("hidden");
-    document.getElementById("gameover-modal").classList.remove("hidden");
-  }
-
-  function restartGame() {
-    state = freshState();
-    document.getElementById("gameover-modal").classList.add("hidden");
-    document.getElementById("start-modal").classList.remove("hidden");
-    render();
-  }
-
   // ---------------------------------------------------------------------
   // Rendering
   // ---------------------------------------------------------------------
@@ -889,17 +805,6 @@
     if (!player) return;
     player.style.left = state.player.xPct + "%";
     player.style.top = state.player.yPct + "%";
-  }
-
-  function updatePatienceBars() {
-    state.tables.forEach(table => {
-      if (!table.customer) return;
-      const bar = document.getElementById("patience-" + table.id);
-      if (!bar) return;
-      const frac = Math.max(0, table.customer.patience / table.customer.patienceMax);
-      bar.style.width = (frac * 100) + "%";
-      bar.style.background = frac > 0.5 ? "var(--good)" : (frac > 0.22 ? "#e0a83e" : "var(--bad)");
-    });
   }
 
   function render() {
@@ -937,11 +842,9 @@
       node.style.top = table.yPct + "%";
       if (table.customer) {
         const drink = DRINKS[table.customer.drinkKey];
-        const frac = Math.max(0, table.customer.patience / table.customer.patienceMax);
         node.innerHTML = `
           <div class="table-icon">${table.customer.avatar}</div>
           <div class="order-bubble">${drink.emoji} ${drink.name}</div>
-          <div class="patience-track"><div class="patience-fill" id="patience-${table.id}" style="width:${frac*100}%; background:${frac > 0.5 ? "var(--good)" : (frac > 0.22 ? "#e0a83e" : "var(--bad)")}"></div></div>
         `;
       } else {
         node.innerHTML = `
@@ -1042,7 +945,6 @@
   // ---------------------------------------------------------------------
   document.getElementById("start-btn").addEventListener("click", startDay);
   document.getElementById("next-day-btn").addEventListener("click", nextDay);
-  document.getElementById("restart-btn").addEventListener("click", restartGame);
   document.getElementById("add-tray-btn").addEventListener("click", addToTray);
   document.getElementById("clear-btn").addEventListener("click", clearMix);
   document.getElementById("toggle-recipes").addEventListener("click", () => {
