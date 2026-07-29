@@ -9,6 +9,8 @@
     --wood-dark: #2b1a12;
     --wood: #4a2f1f;
     --wood-light: #6b4530;
+    --floor: #7a5836;
+    --floor-dark: #5e4227;
     --brass: #d1a35a;
     --brass-bright: #f0c777;
     --neon-pink: #ff5fa2;
@@ -17,7 +19,7 @@
     --good: #4caf50;
     --bad: #e0483e;
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body {
     margin: 0; padding: 0; height: 100%;
     font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
@@ -102,85 +104,155 @@
   @keyframes toast-in { from { opacity:0; transform: translateY(-10px) scale(0.9);} to {opacity:1; transform: translateY(0) scale(1);} }
   @keyframes toast-out { to { opacity: 0; transform: translateY(-6px); } }
 
-  /* ---------- Bar counter / customers ---------- */
-  .counter {
-    background: linear-gradient(180deg, var(--wood-light), var(--wood) 40%, var(--wood-dark));
+  /* ---------- Bar floor ---------- */
+  .floor {
+    position: relative;
+    width: 100%;
+    height: 340px;
+    background:
+      repeating-linear-gradient(90deg, var(--floor) 0 34px, var(--floor-dark) 34px 36px);
     border: 3px solid #1c1108;
     border-radius: 14px;
-    padding: 14px;
-    margin-bottom: 12px;
-    box-shadow: inset 0 0 30px rgba(0,0,0,0.5);
+    margin-bottom: 10px;
+    box-shadow: inset 0 0 40px rgba(0,0,0,0.55);
+    overflow: hidden;
+    touch-action: manipulation;
   }
-  .queue {
-    display: flex;
-    gap: 10px;
-    overflow-x: auto;
-    padding-bottom: 6px;
-    min-height: 120px;
-  }
-  .customer-card {
-    flex: 0 0 auto;
-    width: 140px;
-    background: rgba(255,255,255,0.06);
-    border: 2px solid var(--brass);
-    border-radius: 10px;
-    padding: 8px;
+
+  .node {
+    position: absolute;
+    transform: translate(-50%, -50%);
     text-align: center;
-    position: relative;
-    transition: transform 0.15s;
+    cursor: pointer;
+    user-select: none;
+    width: 104px;
   }
-  .customer-card.active {
+  .node-icon {
+    font-size: 2.1em;
+    line-height: 1;
+    filter: drop-shadow(0 3px 3px rgba(0,0,0,0.5));
+  }
+  .node-label {
+    font-size: 0.68em;
+    color: #f0e3ca;
+    text-shadow: 0 1px 2px #000;
+    font-weight: bold;
+  }
+
+  .till-node .node-icon {
+    background: rgba(0,0,0,0.3);
+    border: 2px solid var(--brass);
+    border-radius: 12px;
+    padding: 6px 10px;
+    display: inline-block;
+  }
+  .till-node.current .node-icon {
     border-color: var(--neon-blue);
-    box-shadow: 0 0 12px var(--neon-blue);
-    transform: scale(1.05);
+    box-shadow: 0 0 14px var(--neon-blue);
   }
-  .customer-card.waiting { opacity: 0.65; }
-  .customer-avatar { font-size: 2.4em; line-height: 1; }
-  .customer-name { font-size: 0.75em; color: #cbb896; margin: 2px 0; }
+
+  .table-node .table-icon {
+    background: rgba(0,0,0,0.25);
+    border: 2px solid rgba(209,163,90,0.5);
+    border-radius: 50%;
+    width: 54px; height: 54px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.6em;
+    margin: 0 auto;
+  }
+  .table-node.occupied .table-icon {
+    border-color: var(--brass);
+    animation: pulse-table 1.4s ease-in-out infinite;
+  }
+  .table-node.current .table-icon {
+    border-color: var(--neon-blue);
+    box-shadow: 0 0 14px var(--neon-blue);
+  }
+  @keyframes pulse-table {
+    0%, 100% { box-shadow: 0 0 4px rgba(240,199,119,0.4); }
+    50% { box-shadow: 0 0 14px rgba(240,199,119,0.9); }
+  }
   .order-bubble {
     background: var(--paper);
     color: #2b1a12;
     border-radius: 8px;
-    padding: 4px 6px;
-    font-size: 0.8em;
+    padding: 3px 5px;
+    font-size: 0.72em;
     font-weight: bold;
-    margin: 4px 0;
-    min-height: 2.2em;
+    margin: 3px auto 2px;
+    min-height: 1.8em;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 4px;
+    gap: 3px;
+    max-width: 100px;
   }
   .patience-track {
-    height: 8px;
+    height: 6px;
+    width: 90%;
+    margin: 2px auto 0;
     background: rgba(0,0,0,0.4);
     border-radius: 4px;
     overflow: hidden;
-    margin-top: 4px;
   }
   .patience-fill {
     height: 100%;
     background: var(--good);
-    transition: width 0.1s linear, background 0.3s;
   }
-  .empty-queue {
+  .table-empty-label {
+    font-size: 0.68em;
     color: #cbb896;
     font-style: italic;
-    margin: auto;
-    padding: 20px;
+    margin-top: 2px;
   }
 
-  /* ---------- Mixing station ---------- */
-  .mix-station {
+  .player {
+    position: absolute;
+    transform: translate(-50%, -78%);
+    font-size: 2.3em;
+    pointer-events: none;
+    z-index: 6;
+    filter: drop-shadow(0 4px 4px rgba(0,0,0,0.6));
+  }
+
+  /* ---------- Tray HUD ---------- */
+  .tray-hud {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--brass);
+    border-radius: 10px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+    font-weight: bold;
+  }
+  .tray-slots { display: flex; gap: 4px; }
+  .tray-slot {
+    width: 30px; height: 30px;
+    border: 1px dashed var(--brass);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1em;
+    background: rgba(255,255,255,0.05);
+  }
+  .tray-slot.filled { border-style: solid; background: var(--wood-light); }
+  #tray-count { margin-left: auto; color: var(--brass-bright); }
+
+  /* ---------- Mixing panel (at Till) ---------- */
+  .mix-panel {
     background: rgba(0,0,0,0.3);
     border: 2px dashed var(--brass);
     border-radius: 10px;
     padding: 10px;
+  }
+  .mix-station {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
-    min-height: 56px;
+    min-height: 50px;
   }
   .mix-slot {
     background: var(--wood-light);
@@ -191,6 +263,16 @@
   }
   .mix-empty-hint { color: #b39c7a; font-size: 0.85em; font-style: italic; }
   .mix-actions { margin-left: auto; display: flex; gap: 8px; }
+
+  .walk-hint {
+    text-align: center;
+    padding: 14px;
+    color: #e8d9bd;
+    font-style: italic;
+    background: rgba(0,0,0,0.25);
+    border: 1px dashed var(--brass);
+    border-radius: 10px;
+  }
 
   button {
     font-family: inherit;
@@ -314,17 +396,25 @@
     <div class="stat"><span class="icon">🧑‍🤝‍🧑</span> <span id="served-val">0</span>/<span id="required-val">0</span> served</div>
   </div>
 
-  <div class="counter">
-    <div class="queue" id="queue"></div>
+  <div class="floor" id="floor"></div>
 
+  <div class="tray-hud">
+    <span>🧺 Tray</span>
+    <div class="tray-slots" id="tray-slots"></div>
+    <span id="tray-count">(0/3)</span>
+  </div>
+
+  <div class="mix-panel" id="mix-panel">
     <div class="mix-station" id="mix-station">
-      <span class="mix-empty-hint" id="mix-hint">Click ingredients below to build the order...</span>
+      <span class="mix-empty-hint" id="mix-hint">Click ingredients below to prepare a drink...</span>
       <div class="mix-actions">
         <button class="btn-clear" id="clear-btn">🗑 Clear</button>
-        <button class="btn-serve" id="serve-btn" disabled>🍹 Serve</button>
+        <button class="btn-serve" id="add-tray-btn" disabled>🧺 Add to Tray</button>
       </div>
     </div>
   </div>
+
+  <div class="walk-hint" id="walk-hint" style="display:none;"></div>
 
   <div class="shelf-title">
     <span>🧰 Ingredient Shelf</span>
@@ -339,12 +429,14 @@
 <div class="modal-overlay" id="start-modal">
   <div class="modal">
     <h2>Welcome to The Rusty Tap</h2>
-    <p>You've just taken over the neighborhood dive bar. Customers will line up at the counter — read their order bubble, click the right ingredients in the mixing tray, then hit <b>Serve</b> before their patience runs out.</p>
+    <p>You've just taken over the neighborhood dive bar. Tables will fill up with customers — read their order bubble, then work the floor:</p>
     <ul>
-      <li>✅ Correct drink, served fast → cash + tip, reputation up</li>
-      <li>❌ Wrong drink or the customer walks → reputation down</li>
+      <li>🧉 Walk to the <b>Till</b> and click ingredients to prepare a drink</li>
+      <li>🧺 Your tray holds a <b>maximum of 3 drinks</b> at once</li>
+      <li>🚶 Tap the matching table to walk over and deliver it automatically</li>
+      <li>✅ Fast delivery → cash + tip, reputation up</li>
+      <li>❌ A customer walking out → reputation down</li>
       <li>💀 Reputation hits zero → you're shut down</li>
-      <li>📖 New drinks unlock as the days go on</li>
     </ul>
     <button class="big-btn" id="start-btn">Open the Bar</button>
   </div>
@@ -404,6 +496,16 @@
   const CUSTOMER_AVATARS = ["🧔","👩","🧑‍🦱","👨‍🦰","👵","👴","🧑‍🎤","👩‍🦳","🧑‍🦲","👨‍🌾","🧑‍🍳","👩‍🚀"];
   const CUSTOMER_NAMES = ["Reg","Sadie","Mo","Frankie","Deb","Old Pete","Junior","Lucy","Big Sal","Nadia","Ozzy","Winnie"];
 
+  const TILL_POS = { xPct: 50, yPct: 16 };
+  const TABLE_POSITIONS = [
+    { xPct: 18, yPct: 48 },
+    { xPct: 82, yPct: 48 },
+    { xPct: 18, yPct: 84 },
+    { xPct: 82, yPct: 84 },
+  ];
+  const MAX_TRAY = 3;
+  const WALK_SPEED_PX_PER_SEC = 190;
+
   // ---------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------
@@ -417,9 +519,19 @@
       customersSpawned: 0,
       customersRequired: 6,
       customersServed: 0,
-      queue: [],           // {id, name, avatar, drinkKey, patience, patienceMax, active}
-      maxQueueSize: 4,
-      mix: [],             // array of ingredient keys, in click order
+      tables: TABLE_POSITIONS.map((pos, i) => ({
+        id: "table-" + i,
+        xPct: pos.xPct,
+        yPct: pos.yPct,
+        customer: null,     // {id, name, avatar, drinkKey, patience, patienceMax}
+      })),
+      tray: [],             // array of {drinkKey}
+      mix: [],              // array of ingredient keys, in click order
+      player: { xPct: TILL_POS.xPct, yPct: TILL_POS.yPct },
+      playerAt: "till",      // "till" | table id | null (walking)
+      moving: false,
+      target: null,          // {xPct, yPct}
+      targetNodeId: null,
       spawnTimer: 0,
       nextSpawnAt: 2000,
       dayEarnings: 0,
@@ -443,6 +555,10 @@
     return Array.from(keys);
   }
 
+  function atTill() {
+    return state.playerAt === "till";
+  }
+
   // ---------------------------------------------------------------------
   // Toasts
   // ---------------------------------------------------------------------
@@ -459,8 +575,8 @@
   // Difficulty helpers
   // ---------------------------------------------------------------------
   function patienceForDay(ingCount) {
-    const base = Math.max(15000 - (state.day - 1) * 900, 8500);
-    return base + ingCount * 1600;
+    const base = Math.max(17000 - (state.day - 1) * 900, 10000);
+    return base + ingCount * 1700;
   }
 
   function spawnIntervalRange() {
@@ -476,12 +592,12 @@
   // ---------------------------------------------------------------------
   // Spawning
   // ---------------------------------------------------------------------
-  function spawnCustomer() {
+  function seatCustomer(table) {
     const keys = unlockedDrinkKeys();
     const drinkKey = keys[Math.floor(Math.random() * keys.length)];
     const drink = DRINKS[drinkKey];
     const patienceMax = patienceForDay(drink.ing.length);
-    const customer = {
+    table.customer = {
       id: state.idCounter++,
       name: CUSTOMER_NAMES[Math.floor(Math.random() * CUSTOMER_NAMES.length)],
       avatar: CUSTOMER_AVATARS[Math.floor(Math.random() * CUSTOMER_AVATARS.length)],
@@ -489,7 +605,6 @@
       patience: patienceMax,
       patienceMax,
     };
-    state.queue.push(customer);
     state.customersSpawned++;
   }
 
@@ -503,44 +618,76 @@
     const dt = Math.min(ts - lastTick, 200);
     lastTick = ts;
 
-    // Spawn logic
-    if (state.customersSpawned < state.customersRequired && state.queue.length < state.maxQueueSize) {
+    // Spawn logic — only seat if a table is free
+    if (state.customersSpawned < state.customersRequired) {
       state.spawnTimer += dt;
       if (state.spawnTimer >= state.nextSpawnAt) {
-        state.spawnTimer = 0;
-        const [lo, hi] = spawnIntervalRange();
-        state.nextSpawnAt = lo + Math.random() * (hi - lo);
-        spawnCustomer();
-        render();
+        const freeTables = state.tables.filter(t => !t.customer);
+        if (freeTables.length > 0) {
+          const table = freeTables[Math.floor(Math.random() * freeTables.length)];
+          seatCustomer(table);
+          state.spawnTimer = 0;
+          const [lo, hi] = spawnIntervalRange();
+          state.nextSpawnAt = lo + Math.random() * (hi - lo);
+          render();
+        }
       }
     }
 
-    // Active customer patience
-    if (state.queue.length > 0) {
-      const active = state.queue[0];
-      active.patience -= dt;
-      if (active.patience <= 0) {
-        active.patience = 0;
-        customerLeaves(active, "timeout");
+    // Patience countdown for every occupied table
+    let anyTimeout = false;
+    state.tables.forEach(table => {
+      if (!table.customer) return;
+      table.customer.patience -= dt;
+      if (table.customer.patience <= 0) {
+        table.customer.patience = 0;
+        anyTimeout = true;
+        customerLeaves(table);
       }
-      updatePatienceBarOnly();
+    });
+
+    // Movement
+    if (state.moving && state.target) {
+      const floorEl = document.getElementById("floor");
+      const rect = floorEl.getBoundingClientRect();
+      const dx = state.target.xPct - state.player.xPct;
+      const dy = state.target.yPct - state.player.yPct;
+      const dxPx = (dx / 100) * rect.width;
+      const dyPx = (dy / 100) * rect.height;
+      const distPx = Math.hypot(dxPx, dyPx);
+      const stepPx = WALK_SPEED_PX_PER_SEC * (dt / 1000);
+      if (distPx <= stepPx || distPx < 0.5) {
+        state.player.xPct = state.target.xPct;
+        state.player.yPct = state.target.yPct;
+        state.moving = false;
+        const arrivedNode = state.targetNodeId;
+        state.target = null;
+        state.targetNodeId = null;
+        arriveAt(arrivedNode);
+      } else {
+        const frac = stepPx / distPx;
+        state.player.xPct += dx * frac;
+        state.player.yPct += dy * frac;
+      }
     }
 
+    renderPlayerPos();
+    updatePatienceBars();
+    if (anyTimeout) render();
     checkDayEnd();
     requestAnimationFrame(tick);
   }
 
-  function customerLeaves(customer, reason) {
-    state.queue.shift();
-    state.mix = [];
+  function customerLeaves(table) {
+    const customer = table.customer;
+    table.customer = null;
     adjustReputation(-10);
     state.dayMissed++;
     toast(`${customer.name} walked out without a drink!`, "bad");
-    render();
   }
 
   function checkDayEnd() {
-    if (!state.dayOver && state.customersSpawned >= state.customersRequired && state.queue.length === 0) {
+    if (!state.dayOver && state.customersSpawned >= state.customersRequired && state.tables.every(t => !t.customer)) {
       endDay();
     }
   }
@@ -561,10 +708,10 @@
   }
 
   // ---------------------------------------------------------------------
-  // Mixing / serving
+  // Mixing / tray / delivery
   // ---------------------------------------------------------------------
   function addIngredient(key) {
-    if (!state.running || state.queue.length === 0) return;
+    if (!state.running || !atTill() || state.tray.length >= MAX_TRAY) return;
     state.mix.push(key);
     render();
   }
@@ -581,30 +728,83 @@
     return sa.every((v, i) => v === sb[i]);
   }
 
-  function serveDrink() {
-    if (state.queue.length === 0 || state.mix.length === 0) return;
-    const customer = state.queue[0];
-    const drink = DRINKS[customer.drinkKey];
-    const correct = sortedEq(state.mix, drink.ing);
-
-    if (correct) {
-      const patienceFrac = customer.patience / customer.patienceMax;
-      const tip = Math.round(drink.price * 0.6 * patienceFrac);
-      const total = drink.price + tip;
-      state.money += total;
-      state.dayEarnings += drink.price;
-      state.dayTips += tip;
-      state.customersServed++;
-      adjustReputation(patienceFrac > 0.5 ? 3 : 1);
-      toast(`${customer.name} loved the ${drink.name}! +$${total}`, "good");
-      state.queue.shift();
-    } else {
-      state.dayWrong++;
-      adjustReputation(-8);
-      toast(`Wrong drink! ${customer.name} wanted a ${drink.name}.`, "bad");
-      state.queue.shift();
+  function addToTray() {
+    if (!atTill() || state.mix.length === 0) return;
+    if (state.tray.length >= MAX_TRAY) {
+      toast(`Tray is full (${MAX_TRAY}/${MAX_TRAY})! Go deliver those first.`, "bad");
+      return;
     }
+    const matchKey = unlockedDrinkKeys().find(k => sortedEq(state.mix, DRINKS[k].ing));
+    if (!matchKey) {
+      toast("That's not a recipe I know — check the Recipe Book.", "bad");
+      state.mix = [];
+      render();
+      return;
+    }
+    state.tray.push({ drinkKey: matchKey });
     state.mix = [];
+    toast(`Prepared a ${DRINKS[matchKey].name} (${state.tray.length}/${MAX_TRAY} on tray)`, "good");
+    render();
+  }
+
+  function tryDeliver(table) {
+    if (!table.customer) return;
+    const idx = state.tray.findIndex(item => item.drinkKey === table.customer.drinkKey);
+    if (idx === -1) {
+      if (state.tray.length > 0) {
+        toast(`Nothing on your tray for ${table.customer.name}'s order.`, "info");
+      }
+      return;
+    }
+    const customer = table.customer;
+    const drink = DRINKS[customer.drinkKey];
+    const patienceFrac = customer.patience / customer.patienceMax;
+    const tip = Math.round(drink.price * 0.6 * patienceFrac);
+    const total = drink.price + tip;
+    state.money += total;
+    state.dayEarnings += drink.price;
+    state.dayTips += tip;
+    state.customersServed++;
+    adjustReputation(patienceFrac > 0.5 ? 3 : 1);
+    toast(`${customer.name} loved the ${drink.name}! +$${total}`, "good");
+    state.tray.splice(idx, 1);
+    table.customer = null;
+  }
+
+  // ---------------------------------------------------------------------
+  // Movement / navigation
+  // ---------------------------------------------------------------------
+  function nodePosition(nodeId) {
+    if (nodeId === "till") return TILL_POS;
+    const table = state.tables.find(t => t.id === nodeId);
+    return table ? { xPct: table.xPct, yPct: table.yPct } : null;
+  }
+
+  function goTo(nodeId) {
+    if (!state.running) return;
+    if (!state.moving && state.playerAt === nodeId) {
+      arriveAt(nodeId);
+      return;
+    }
+    // Leaving the till with an unfinished mix discards it
+    if (state.playerAt === "till" && state.mix.length > 0) {
+      state.mix = [];
+    }
+    const pos = nodePosition(nodeId);
+    if (!pos) return;
+    state.target = pos;
+    state.targetNodeId = nodeId;
+    state.moving = true;
+    state.playerAt = null;
+    render();
+  }
+
+  function arriveAt(nodeId) {
+    state.playerAt = nodeId;
+    if (nodeId !== "till") {
+      const table = state.tables.find(t => t.id === nodeId);
+      if (table) tryDeliver(table);
+    }
     render();
   }
 
@@ -617,8 +817,14 @@
     state.customersSpawned = 0;
     state.customersServed = 0;
     state.customersRequired = customersRequiredForDay(state.day);
-    state.queue = [];
+    state.tables.forEach(t => t.customer = null);
+    state.tray = [];
     state.mix = [];
+    state.player = { xPct: TILL_POS.xPct, yPct: TILL_POS.yPct };
+    state.playerAt = "till";
+    state.moving = false;
+    state.target = null;
+    state.targetNodeId = null;
     state.spawnTimer = 0;
     state.dayEarnings = 0;
     state.dayTips = 0;
@@ -651,7 +857,6 @@
       <div class="summary-line"><span>💵 Drink sales</span><span>$${state.dayEarnings}</span></div>
       <div class="summary-line"><span>💰 Tips earned</span><span>$${state.dayTips}</span></div>
       <div class="summary-line"><span>🚪 Walked out</span><span>${state.dayMissed}</span></div>
-      <div class="summary-line"><span>❌ Wrong orders</span><span>${state.dayWrong}</span></div>
       <div class="summary-line"><span>⭐ Reputation</span><span>${repStars()} (${state.reputation}/100)</span></div>
       ${unlockHtml}
     `;
@@ -686,13 +891,22 @@
   // ---------------------------------------------------------------------
   // Rendering
   // ---------------------------------------------------------------------
-  function updatePatienceBarOnly() {
-    const bar = document.querySelector(".customer-card.active .patience-fill");
-    if (!bar || state.queue.length === 0) return;
-    const active = state.queue[0];
-    const frac = Math.max(0, active.patience / active.patienceMax);
-    bar.style.width = (frac * 100) + "%";
-    bar.style.background = frac > 0.5 ? "var(--good)" : (frac > 0.22 ? "#e0a83e" : "var(--bad)");
+  function renderPlayerPos() {
+    const player = document.getElementById("player");
+    if (!player) return;
+    player.style.left = state.player.xPct + "%";
+    player.style.top = state.player.yPct + "%";
+  }
+
+  function updatePatienceBars() {
+    state.tables.forEach(table => {
+      if (!table.customer) return;
+      const bar = document.getElementById("patience-" + table.id);
+      if (!bar) return;
+      const frac = Math.max(0, table.customer.patience / table.customer.patienceMax);
+      bar.style.width = (frac * 100) + "%";
+      bar.style.background = frac > 0.5 ? "var(--good)" : (frac > 0.22 ? "#e0a83e" : "var(--bad)");
+    });
   }
 
   function render() {
@@ -702,43 +916,95 @@
     document.getElementById("served-val").textContent = state.customersServed;
     document.getElementById("required-val").textContent = state.customersRequired;
 
-    renderQueue();
-    renderMix();
+    renderFloor();
+    renderTray();
+    renderMixPanel();
     renderShelf();
     renderRecipeBook();
   }
 
-  function renderQueue() {
-    const q = document.getElementById("queue");
-    q.innerHTML = "";
-    if (state.queue.length === 0) {
-      q.innerHTML = `<div class="empty-queue">No customers right now — more will arrive soon...</div>`;
-      return;
-    }
-    state.queue.forEach((c, idx) => {
-      const drink = DRINKS[c.drinkKey];
-      const frac = Math.max(0, c.patience / c.patienceMax);
-      const card = document.createElement("div");
-      card.className = "customer-card " + (idx === 0 ? "active" : "waiting");
-      card.innerHTML = `
-        <div class="customer-avatar">${c.avatar}</div>
-        <div class="customer-name">${c.name}</div>
-        <div class="order-bubble">${drink.emoji} ${drink.name}</div>
-        <div class="patience-track"><div class="patience-fill" style="width:${frac*100}%; background:${frac > 0.5 ? "var(--good)" : (frac > 0.22 ? "#e0a83e" : "var(--bad)")}"></div></div>
-      `;
-      q.appendChild(card);
+  function renderFloor() {
+    const floor = document.getElementById("floor");
+    floor.innerHTML = "";
+
+    // Till node
+    const till = document.createElement("div");
+    till.className = "node till-node" + (state.playerAt === "till" ? " current" : "");
+    till.style.left = TILL_POS.xPct + "%";
+    till.style.top = TILL_POS.yPct + "%";
+    till.innerHTML = `<div class="node-icon">🍸</div><div class="node-label">Till</div>`;
+    till.addEventListener("click", () => goTo("till"));
+    floor.appendChild(till);
+
+    // Table nodes
+    state.tables.forEach(table => {
+      const node = document.createElement("div");
+      node.className = "node table-node" + (table.customer ? " occupied" : "") + (state.playerAt === table.id ? " current" : "");
+      node.style.left = table.xPct + "%";
+      node.style.top = table.yPct + "%";
+      if (table.customer) {
+        const drink = DRINKS[table.customer.drinkKey];
+        const frac = Math.max(0, table.customer.patience / table.customer.patienceMax);
+        node.innerHTML = `
+          <div class="table-icon">${table.customer.avatar}</div>
+          <div class="order-bubble">${drink.emoji} ${drink.name}</div>
+          <div class="patience-track"><div class="patience-fill" id="patience-${table.id}" style="width:${frac*100}%; background:${frac > 0.5 ? "var(--good)" : (frac > 0.22 ? "#e0a83e" : "var(--bad)")}"></div></div>
+        `;
+      } else {
+        node.innerHTML = `
+          <div class="table-icon">🪑</div>
+          <div class="table-empty-label">Empty table</div>
+        `;
+      }
+      node.addEventListener("click", () => goTo(table.id));
+      floor.appendChild(node);
     });
+
+    // Player token
+    const player = document.createElement("div");
+    player.className = "player";
+    player.id = "player";
+    player.textContent = "🧑‍🍳";
+    player.style.left = state.player.xPct + "%";
+    player.style.top = state.player.yPct + "%";
+    floor.appendChild(player);
   }
 
-  function renderMix() {
+  function renderTray() {
+    const slotsWrap = document.getElementById("tray-slots");
+    slotsWrap.innerHTML = "";
+    for (let i = 0; i < MAX_TRAY; i++) {
+      const item = state.tray[i];
+      const slot = document.createElement("div");
+      slot.className = "tray-slot" + (item ? " filled" : "");
+      if (item) {
+        slot.textContent = DRINKS[item.drinkKey].emoji;
+        slot.title = DRINKS[item.drinkKey].name;
+      }
+      slotsWrap.appendChild(slot);
+    }
+    document.getElementById("tray-count").textContent = `(${state.tray.length}/${MAX_TRAY})`;
+  }
+
+  function renderMixPanel() {
+    const panel = document.getElementById("mix-panel");
+    const hint = document.getElementById("walk-hint");
+    const isAtTill = atTill();
+    panel.style.display = isAtTill ? "block" : "none";
+    hint.style.display = isAtTill ? "none" : "block";
+    if (!isAtTill) {
+      hint.textContent = state.moving
+        ? "🚶 Walking..."
+        : "🚶 Tap a table to deliver, or tap the Till to prepare more drinks.";
+    }
+
     const station = document.getElementById("mix-station");
-    const hint = document.getElementById("mix-hint");
-    // remove old slots
+    const mixHint = document.getElementById("mix-hint");
     station.querySelectorAll(".mix-slot").forEach(el => el.remove());
     if (state.mix.length === 0) {
-      hint.style.display = "inline";
+      mixHint.style.display = "inline";
     } else {
-      hint.style.display = "none";
+      mixHint.style.display = "none";
       state.mix.forEach(key => {
         const ing = INGREDIENTS[key];
         const slot = document.createElement("div");
@@ -748,18 +1014,19 @@
         station.insertBefore(slot, station.querySelector(".mix-actions"));
       });
     }
-    document.getElementById("serve-btn").disabled = state.mix.length === 0 || state.queue.length === 0;
+    document.getElementById("add-tray-btn").disabled = state.mix.length === 0 || state.tray.length >= MAX_TRAY;
   }
 
   function renderShelf() {
     const shelf = document.getElementById("shelf");
     shelf.innerHTML = "";
+    const disabled = !atTill() || state.tray.length >= MAX_TRAY;
     unlockedIngredientKeys().sort().forEach(key => {
       const ing = INGREDIENTS[key];
       const btn = document.createElement("button");
       btn.className = "ingredient-btn";
       btn.innerHTML = `<span class="emoji">${ing.emoji}</span><span class="label">${ing.label}</span>`;
-      btn.disabled = state.queue.length === 0;
+      btn.disabled = disabled;
       btn.addEventListener("click", () => addIngredient(key));
       shelf.appendChild(btn);
     });
@@ -783,7 +1050,7 @@
   document.getElementById("start-btn").addEventListener("click", startDay);
   document.getElementById("next-day-btn").addEventListener("click", nextDay);
   document.getElementById("restart-btn").addEventListener("click", restartGame);
-  document.getElementById("serve-btn").addEventListener("click", serveDrink);
+  document.getElementById("add-tray-btn").addEventListener("click", addToTray);
   document.getElementById("clear-btn").addEventListener("click", clearMix);
   document.getElementById("toggle-recipes").addEventListener("click", () => {
     document.getElementById("recipe-book").classList.toggle("open");
