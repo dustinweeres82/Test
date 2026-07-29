@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Rusty Tap — Bar Owner Game</title>
+<style>
+  :root {
+    --wood-dark: #2b1a12;
+    --wood: #4a2f1f;
+    --wood-light: #6b4530;
+    --brass: #d1a35a;
+    --brass-bright: #f0c777;
+    --neon-pink: #ff5fa2;
+    --neon-blue: #3fd0ff;
+    --paper: #f4e9d8;
+    --good: #4caf50;
+    --bad: #e0483e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
+    background: radial-gradient(ellipse at top, #3a2416, #150c07 70%);
+    color: var(--paper);
+    overflow-x: hidden;
+  }
+  #app { max-width: 960px; margin: 0 auto; padding: 12px 14px 40px; }
+
+  /* ---------- Header ---------- */
+  .sign {
+    text-align: center;
+    padding: 14px 10px 10px;
+  }
+  .sign h1 {
+    margin: 0;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 2.1em;
+    letter-spacing: 2px;
+    color: var(--neon-pink);
+    text-shadow:
+      0 0 6px var(--neon-pink),
+      0 0 18px var(--neon-pink),
+      0 0 2px #fff;
+  }
+  .sign p {
+    margin: 2px 0 0;
+    color: var(--neon-blue);
+    text-shadow: 0 0 6px var(--neon-blue);
+    font-size: 0.9em;
+    letter-spacing: 1px;
+  }
+
+  .stats-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid var(--brass);
+    border-radius: 10px;
+    padding: 8px 12px;
+    margin: 10px 0;
+  }
+  .stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    font-weight: bold;
+    font-size: 0.95em;
+  }
+  .stat .icon { font-size: 1.2em; }
+  #rep-stars { color: var(--brass-bright); letter-spacing: 1px; }
+  #money-val { color: #8fef8f; }
+
+  /* ---------- Toasts ---------- */
+  #toast-wrap {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+    pointer-events: none;
+  }
+  .toast {
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 0.9em;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    animation: toast-in 0.25s ease-out, toast-out 0.4s ease-in 1.8s forwards;
+    white-space: nowrap;
+  }
+  .toast.good { background: var(--good); color: #08240a; }
+  .toast.bad { background: var(--bad); color: #2a0605; }
+  .toast.info { background: var(--brass-bright); color: #3a2205; }
+  @keyframes toast-in { from { opacity:0; transform: translateY(-10px) scale(0.9);} to {opacity:1; transform: translateY(0) scale(1);} }
+  @keyframes toast-out { to { opacity: 0; transform: translateY(-6px); } }
+
+  /* ---------- Bar counter / customers ---------- */
+  .counter {
+    background: linear-gradient(180deg, var(--wood-light), var(--wood) 40%, var(--wood-dark));
+    border: 3px solid #1c1108;
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 12px;
+    box-shadow: inset 0 0 30px rgba(0,0,0,0.5);
+  }
+  .queue {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    min-height: 120px;
+  }
+  .customer-card {
+    flex: 0 0 auto;
+    width: 140px;
+    background: rgba(255,255,255,0.06);
+    border: 2px solid var(--brass);
+    border-radius: 10px;
+    padding: 8px;
+    text-align: center;
+    position: relative;
+    transition: transform 0.15s;
+  }
+  .customer-card.active {
+    border-color: var(--neon-blue);
+    box-shadow: 0 0 12px var(--neon-blue);
+    transform: scale(1.05);
+  }
+  .customer-card.waiting { opacity: 0.65; }
+  .customer-avatar { font-size: 2.4em; line-height: 1; }
+  .customer-name { font-size: 0.75em; color: #cbb896; margin: 2px 0; }
+  .order-bubble {
+    background: var(--paper);
+    color: #2b1a12;
+    border-radius: 8px;
+    padding: 4px 6px;
+    font-size: 0.8em;
+    font-weight: bold;
+    margin: 4px 0;
+    min-height: 2.2em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+  .patience-track {
+    height: 8px;
+    background: rgba(0,0,0,0.4);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 4px;
+  }
+  .patience-fill {
+    height: 100%;
+    background: var(--good);
+    transition: width 0.1s linear, background 0.3s;
+  }
+  .empty-queue {
+    color: #cbb896;
+    font-style: italic;
+    margin: auto;
+    padding: 20px;
+  }
+
+  /* ---------- Mixing station ---------- */
+  .mix-station {
+    background: rgba(0,0,0,0.3);
+    border: 2px dashed var(--brass);
+    border-radius: 10px;
+    padding: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-height: 56px;
+  }
+  .mix-slot {
+    background: var(--wood-light);
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 1.3em;
+    border: 1px solid var(--brass);
+  }
+  .mix-empty-hint { color: #b39c7a; font-size: 0.85em; font-style: italic; }
+  .mix-actions { margin-left: auto; display: flex; gap: 8px; }
+
+  button {
+    font-family: inherit;
+    cursor: pointer;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-weight: bold;
+    font-size: 0.9em;
+    transition: transform 0.1s, filter 0.1s;
+  }
+  button:active:not(:disabled) { transform: scale(0.95); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-serve { background: var(--good); color: #072b08; }
+  .btn-clear { background: var(--bad); color: #2a0605; }
+  .btn-serve:hover:not(:disabled), .btn-clear:hover:not(:disabled) { filter: brightness(1.1); }
+
+  /* ---------- Ingredient shelf ---------- */
+  .shelf-title {
+    margin: 14px 0 6px;
+    color: var(--brass-bright);
+    font-size: 1em;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .shelf-title button.link {
+    background: transparent;
+    color: var(--neon-blue);
+    text-decoration: underline;
+    padding: 2px 4px;
+    font-size: 0.85em;
+  }
+  .shelf {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+    gap: 8px;
+  }
+  .ingredient-btn {
+    background: var(--wood-light);
+    color: var(--paper);
+    border: 1px solid var(--brass);
+    border-radius: 10px;
+    padding: 8px 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .ingredient-btn .emoji { font-size: 1.6em; }
+  .ingredient-btn .label { font-size: 0.7em; }
+  .ingredient-btn:hover { filter: brightness(1.2); }
+
+  /* ---------- Recipe book ---------- */
+  .recipe-book {
+    background: rgba(0,0,0,0.35);
+    border: 1px solid var(--brass);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-top: 10px;
+    display: none;
+  }
+  .recipe-book.open { display: block; }
+  .recipe-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px dotted rgba(255,255,255,0.15);
+    font-size: 0.85em;
+  }
+  .recipe-row:last-child { border-bottom: none; }
+  .recipe-name { min-width: 110px; font-weight: bold; color: var(--brass-bright); }
+
+  /* ---------- Modals ---------- */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.75);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+    padding: 16px;
+  }
+  .modal-overlay.hidden { display: none; }
+  .modal {
+    background: linear-gradient(180deg, var(--wood-light), var(--wood-dark));
+    border: 3px solid var(--brass);
+    border-radius: 14px;
+    padding: 24px;
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+    box-shadow: 0 0 40px rgba(0,0,0,0.8);
+  }
+  .modal h2 { color: var(--brass-bright); margin-top: 0; }
+  .modal p { line-height: 1.5; }
+  .modal ul { text-align: left; line-height: 1.6; }
+  .modal .big-btn {
+    background: var(--neon-pink);
+    color: #2a0517;
+    font-size: 1.05em;
+    padding: 12px 26px;
+    margin-top: 10px;
+    border-radius: 10px;
+  }
+  .summary-line { display: flex; justify-content: space-between; margin: 4px 0; padding: 0 6px; }
+</style>
+</head>
+<body>
+<div id="toast-wrap"></div>
+
+<div id="app">
+  <div class="sign">
+    <h1>🍸 The Rusty Tap 🍺</h1>
+    <p>YOU'RE THE OWNER. YOU'RE THE BARTENDER. DON'T KEEP 'EM WAITING.</p>
+  </div>
+
+  <div class="stats-bar">
+    <div class="stat"><span class="icon">📅</span> Day <span id="day-val">1</span></div>
+    <div class="stat"><span class="icon">💵</span> $<span id="money-val">0</span></div>
+    <div class="stat"><span class="icon">⭐</span> <span id="rep-stars">★★★★☆</span></div>
+    <div class="stat"><span class="icon">🧑‍🤝‍🧑</span> <span id="served-val">0</span>/<span id="required-val">0</span> served</div>
+  </div>
+
+  <div class="counter">
+    <div class="queue" id="queue"></div>
+
+    <div class="mix-station" id="mix-station">
+      <span class="mix-empty-hint" id="mix-hint">Click ingredients below to build the order...</span>
+      <div class="mix-actions">
+        <button class="btn-clear" id="clear-btn">🗑 Clear</button>
+        <button class="btn-serve" id="serve-btn" disabled>🍹 Serve</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="shelf-title">
+    <span>🧰 Ingredient Shelf</span>
+    <button class="link" id="toggle-recipes">📖 Recipe Book</button>
+  </div>
+  <div class="shelf" id="shelf"></div>
+
+  <div class="recipe-book" id="recipe-book"></div>
+</div>
+
+<!-- Start Modal -->
+<div class="modal-overlay" id="start-modal">
+  <div class="modal">
+    <h2>Welcome to The Rusty Tap</h2>
+    <p>You've just taken over the neighborhood dive bar. Customers will line up at the counter — read their order bubble, click the right ingredients in the mixing tray, then hit <b>Serve</b> before their patience runs out.</p>
+    <ul>
+      <li>✅ Correct drink, served fast → cash + tip, reputation up</li>
+      <li>❌ Wrong drink or the customer walks → reputation down</li>
+      <li>💀 Reputation hits zero → you're shut down</li>
+      <li>📖 New drinks unlock as the days go on</li>
+    </ul>
+    <button class="big-btn" id="start-btn">Open the Bar</button>
+  </div>
+</div>
+
+<!-- Day Summary Modal -->
+<div class="modal-overlay hidden" id="day-modal">
+  <div class="modal">
+    <h2 id="day-modal-title">Last Call!</h2>
+    <div id="day-summary"></div>
+    <button class="big-btn" id="next-day-btn">Start Next Day</button>
+  </div>
+</div>
+
+<!-- Game Over Modal -->
+<div class="modal-overlay hidden" id="gameover-modal">
+  <div class="modal">
+    <h2>🔒 The Rusty Tap Has Closed</h2>
+    <p>Word got around about bad service, and the regulars stopped coming. The bank called in the lease.</p>
+    <div id="gameover-summary"></div>
+    <button class="big-btn" id="restart-btn">Try Again</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // Data
+  // ---------------------------------------------------------------------
+  const INGREDIENTS = {
+    beer:    { label: "Beer",         emoji: "🍺" },
+    whiskey: { label: "Whiskey",      emoji: "🥃" },
+    vodka:   { label: "Vodka",        emoji: "🍶" },
+    rum:     { label: "Rum",          emoji: "🧉" },
+    gin:     { label: "Gin",          emoji: "🍸" },
+    cola:    { label: "Cola",         emoji: "🥤" },
+    tonic:   { label: "Tonic",        emoji: "💧" },
+    soda:    { label: "Soda Water",   emoji: "🫧" },
+    lime:    { label: "Lime",         emoji: "🍋" },
+    oj:      { label: "Orange Juice", emoji: "🍊" },
+    sugar:   { label: "Sugar",        emoji: "🧂" },
+    ice:     { label: "Ice",          emoji: "🧊" },
+  };
+
+  const DRINKS = {
+    beer:       { name: "Draft Beer",    emoji: "🍺", ing: ["beer"],                       price: 4, unlockDay: 1 },
+    whiskey:    { name: "Whiskey Neat",  emoji: "🥃", ing: ["whiskey"],                    price: 6, unlockDay: 1 },
+    vodkaSoda:  { name: "Vodka Soda",    emoji: "🍶", ing: ["vodka", "soda", "ice"],       price: 7, unlockDay: 1 },
+    ginTonic:   { name: "Gin & Tonic",   emoji: "🍸", ing: ["gin", "tonic", "ice"],        price: 7, unlockDay: 2 },
+    rumCola:    { name: "Rum & Cola",    emoji: "🧉", ing: ["rum", "cola", "ice"],         price: 7, unlockDay: 2 },
+    screwdriver:{ name: "Screwdriver",   emoji: "🍊", ing: ["vodka", "oj", "ice"],         price: 8, unlockDay: 3 },
+    whiskeySour:{ name: "Whiskey Sour",  emoji: "🍋", ing: ["whiskey", "lime", "sugar", "ice"], price: 9, unlockDay: 4 },
+  };
+
+  const CUSTOMER_AVATARS = ["🧔","👩","🧑‍🦱","👨‍🦰","👵","👴","🧑‍🎤","👩‍🦳","🧑‍🦲","👨‍🌾","🧑‍🍳","👩‍🚀"];
+  const CUSTOMER_NAMES = ["Reg","Sadie","Mo","Frankie","Deb","Old Pete","Junior","Lucy","Big Sal","Nadia","Ozzy","Winnie"];
+
+  // ---------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------
+  let state = null;
+
+  function freshState() {
+    return {
+      day: 1,
+      money: 40,
+      reputation: 80,      // 0-100
+      customersSpawned: 0,
+      customersRequired: 6,
+      customersServed: 0,
+      queue: [],           // {id, name, avatar, drinkKey, patience, patienceMax, active}
+      maxQueueSize: 4,
+      mix: [],             // array of ingredient keys, in click order
+      spawnTimer: 0,
+      nextSpawnAt: 2000,
+      dayEarnings: 0,
+      dayTips: 0,
+      dayMissed: 0,
+      dayWrong: 0,
+      running: false,
+      dayOver: false,
+      gameOver: false,
+      idCounter: 1,
+    };
+  }
+
+  function unlockedDrinkKeys() {
+    return Object.keys(DRINKS).filter(k => DRINKS[k].unlockDay <= state.day);
+  }
+
+  function unlockedIngredientKeys() {
+    const keys = new Set();
+    unlockedDrinkKeys().forEach(dk => DRINKS[dk].ing.forEach(i => keys.add(i)));
+    return Array.from(keys);
+  }
+
+  // ---------------------------------------------------------------------
+  // Toasts
+  // ---------------------------------------------------------------------
+  function toast(msg, type) {
+    const wrap = document.getElementById("toast-wrap");
+    const el = document.createElement("div");
+    el.className = "toast " + (type || "info");
+    el.textContent = msg;
+    wrap.appendChild(el);
+    setTimeout(() => el.remove(), 2300);
+  }
+
+  // ---------------------------------------------------------------------
+  // Difficulty helpers
+  // ---------------------------------------------------------------------
+  function patienceForDay(ingCount) {
+    const base = Math.max(15000 - (state.day - 1) * 900, 8500);
+    return base + ingCount * 1600;
+  }
+
+  function spawnIntervalRange() {
+    const lo = Math.max(2600 - state.day * 120, 1200);
+    const hi = Math.max(5200 - state.day * 150, 2200);
+    return [lo, hi];
+  }
+
+  function customersRequiredForDay(day) {
+    return 6 + (day - 1) * 2;
+  }
+
+  // ---------------------------------------------------------------------
+  // Spawning
+  // ---------------------------------------------------------------------
+  function spawnCustomer() {
+    const keys = unlockedDrinkKeys();
+    const drinkKey = keys[Math.floor(Math.random() * keys.length)];
+    const drink = DRINKS[drinkKey];
+    const patienceMax = patienceForDay(drink.ing.length);
+    const customer = {
+      id: state.idCounter++,
+      name: CUSTOMER_NAMES[Math.floor(Math.random() * CUSTOMER_NAMES.length)],
+      avatar: CUSTOMER_AVATARS[Math.floor(Math.random() * CUSTOMER_AVATARS.length)],
+      drinkKey,
+      patience: patienceMax,
+      patienceMax,
+    };
+    state.queue.push(customer);
+    state.customersSpawned++;
+  }
+
+  // ---------------------------------------------------------------------
+  // Game tick
+  // ---------------------------------------------------------------------
+  let lastTick = null;
+  function tick(ts) {
+    if (!state.running) { lastTick = null; return; }
+    if (lastTick === null) lastTick = ts;
+    const dt = Math.min(ts - lastTick, 200);
+    lastTick = ts;
+
+    // Spawn logic
+    if (state.customersSpawned < state.customersRequired && state.queue.length < state.maxQueueSize) {
+      state.spawnTimer += dt;
+      if (state.spawnTimer >= state.nextSpawnAt) {
+        state.spawnTimer = 0;
+        const [lo, hi] = spawnIntervalRange();
+        state.nextSpawnAt = lo + Math.random() * (hi - lo);
+        spawnCustomer();
+        render();
+      }
+    }
+
+    // Active customer patience
+    if (state.queue.length > 0) {
+      const active = state.queue[0];
+      active.patience -= dt;
+      if (active.patience <= 0) {
+        active.patience = 0;
+        customerLeaves(active, "timeout");
+      }
+      updatePatienceBarOnly();
+    }
+
+    checkDayEnd();
+    requestAnimationFrame(tick);
+  }
+
+  function customerLeaves(customer, reason) {
+    state.queue.shift();
+    state.mix = [];
+    adjustReputation(-10);
+    state.dayMissed++;
+    toast(`${customer.name} walked out without a drink!`, "bad");
+    render();
+  }
+
+  function checkDayEnd() {
+    if (!state.dayOver && state.customersSpawned >= state.customersRequired && state.queue.length === 0) {
+      endDay();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Reputation / money
+  // ---------------------------------------------------------------------
+  function adjustReputation(delta) {
+    state.reputation = Math.max(0, Math.min(100, state.reputation + delta));
+    if (state.reputation <= 0) {
+      triggerGameOver();
+    }
+  }
+
+  function repStars() {
+    const filled = Math.round(state.reputation / 20);
+    return "★".repeat(filled) + "☆".repeat(5 - filled);
+  }
+
+  // ---------------------------------------------------------------------
+  // Mixing / serving
+  // ---------------------------------------------------------------------
+  function addIngredient(key) {
+    if (!state.running || state.queue.length === 0) return;
+    state.mix.push(key);
+    render();
+  }
+
+  function clearMix() {
+    state.mix = [];
+    render();
+  }
+
+  function sortedEq(a, b) {
+    if (a.length !== b.length) return false;
+    const sa = [...a].sort();
+    const sb = [...b].sort();
+    return sa.every((v, i) => v === sb[i]);
+  }
+
+  function serveDrink() {
+    if (state.queue.length === 0 || state.mix.length === 0) return;
+    const customer = state.queue[0];
+    const drink = DRINKS[customer.drinkKey];
+    const correct = sortedEq(state.mix, drink.ing);
+
+    if (correct) {
+      const patienceFrac = customer.patience / customer.patienceMax;
+      const tip = Math.round(drink.price * 0.6 * patienceFrac);
+      const total = drink.price + tip;
+      state.money += total;
+      state.dayEarnings += drink.price;
+      state.dayTips += tip;
+      state.customersServed++;
+      adjustReputation(patienceFrac > 0.5 ? 3 : 1);
+      toast(`${customer.name} loved the ${drink.name}! +$${total}`, "good");
+      state.queue.shift();
+    } else {
+      state.dayWrong++;
+      adjustReputation(-8);
+      toast(`Wrong drink! ${customer.name} wanted a ${drink.name}.`, "bad");
+      state.queue.shift();
+    }
+    state.mix = [];
+    render();
+  }
+
+  // ---------------------------------------------------------------------
+  // Day flow
+  // ---------------------------------------------------------------------
+  function startDay() {
+    state.running = true;
+    state.dayOver = false;
+    state.customersSpawned = 0;
+    state.customersServed = 0;
+    state.customersRequired = customersRequiredForDay(state.day);
+    state.queue = [];
+    state.mix = [];
+    state.spawnTimer = 0;
+    state.dayEarnings = 0;
+    state.dayTips = 0;
+    state.dayMissed = 0;
+    state.dayWrong = 0;
+    document.getElementById("start-modal").classList.add("hidden");
+    document.getElementById("day-modal").classList.add("hidden");
+    render();
+    lastTick = null;
+    requestAnimationFrame(tick);
+  }
+
+  function endDay() {
+    state.dayOver = true;
+    state.running = false;
+
+    const modal = document.getElementById("day-modal");
+    const title = document.getElementById("day-modal-title");
+    const summary = document.getElementById("day-summary");
+    title.textContent = `Closing Time — Day ${state.day} Complete`;
+
+    const newlyUnlocked = Object.keys(DRINKS).filter(k => DRINKS[k].unlockDay === state.day + 1);
+    let unlockHtml = "";
+    if (newlyUnlocked.length > 0) {
+      unlockHtml = `<p>🆕 Tomorrow's new drinks: <b>${newlyUnlocked.map(k => DRINKS[k].name).join(", ")}</b></p>`;
+    }
+
+    summary.innerHTML = `
+      <div class="summary-line"><span>🧑‍🤝‍🧑 Customers served</span><span>${state.customersServed}</span></div>
+      <div class="summary-line"><span>💵 Drink sales</span><span>$${state.dayEarnings}</span></div>
+      <div class="summary-line"><span>💰 Tips earned</span><span>$${state.dayTips}</span></div>
+      <div class="summary-line"><span>🚪 Walked out</span><span>${state.dayMissed}</span></div>
+      <div class="summary-line"><span>❌ Wrong orders</span><span>${state.dayWrong}</span></div>
+      <div class="summary-line"><span>⭐ Reputation</span><span>${repStars()} (${state.reputation}/100)</span></div>
+      ${unlockHtml}
+    `;
+    modal.classList.remove("hidden");
+  }
+
+  function nextDay() {
+    state.day++;
+    startDay();
+  }
+
+  function triggerGameOver() {
+    state.running = false;
+    state.gameOver = true;
+    const summary = document.getElementById("gameover-summary");
+    summary.innerHTML = `
+      <div class="summary-line"><span>📅 Days survived</span><span>${state.day}</span></div>
+      <div class="summary-line"><span>💵 Final cash</span><span>$${state.money}</span></div>
+      <div class="summary-line"><span>🧑‍🤝‍🧑 Total served</span><span>${state.customersServed}</span></div>
+    `;
+    document.getElementById("day-modal").classList.add("hidden");
+    document.getElementById("gameover-modal").classList.remove("hidden");
+  }
+
+  function restartGame() {
+    state = freshState();
+    document.getElementById("gameover-modal").classList.add("hidden");
+    document.getElementById("start-modal").classList.remove("hidden");
+    render();
+  }
+
+  // ---------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------
+  function updatePatienceBarOnly() {
+    const bar = document.querySelector(".customer-card.active .patience-fill");
+    if (!bar || state.queue.length === 0) return;
+    const active = state.queue[0];
+    const frac = Math.max(0, active.patience / active.patienceMax);
+    bar.style.width = (frac * 100) + "%";
+    bar.style.background = frac > 0.5 ? "var(--good)" : (frac > 0.22 ? "#e0a83e" : "var(--bad)");
+  }
+
+  function render() {
+    document.getElementById("day-val").textContent = state.day;
+    document.getElementById("money-val").textContent = state.money;
+    document.getElementById("rep-stars").textContent = repStars();
+    document.getElementById("served-val").textContent = state.customersServed;
+    document.getElementById("required-val").textContent = state.customersRequired;
+
+    renderQueue();
+    renderMix();
+    renderShelf();
+    renderRecipeBook();
+  }
+
+  function renderQueue() {
+    const q = document.getElementById("queue");
+    q.innerHTML = "";
+    if (state.queue.length === 0) {
+      q.innerHTML = `<div class="empty-queue">No customers right now — more will arrive soon...</div>`;
+      return;
+    }
+    state.queue.forEach((c, idx) => {
+      const drink = DRINKS[c.drinkKey];
+      const frac = Math.max(0, c.patience / c.patienceMax);
+      const card = document.createElement("div");
+      card.className = "customer-card " + (idx === 0 ? "active" : "waiting");
+      card.innerHTML = `
+        <div class="customer-avatar">${c.avatar}</div>
+        <div class="customer-name">${c.name}</div>
+        <div class="order-bubble">${drink.emoji} ${drink.name}</div>
+        <div class="patience-track"><div class="patience-fill" style="width:${frac*100}%; background:${frac > 0.5 ? "var(--good)" : (frac > 0.22 ? "#e0a83e" : "var(--bad)")}"></div></div>
+      `;
+      q.appendChild(card);
+    });
+  }
+
+  function renderMix() {
+    const station = document.getElementById("mix-station");
+    const hint = document.getElementById("mix-hint");
+    // remove old slots
+    station.querySelectorAll(".mix-slot").forEach(el => el.remove());
+    if (state.mix.length === 0) {
+      hint.style.display = "inline";
+    } else {
+      hint.style.display = "none";
+      state.mix.forEach(key => {
+        const ing = INGREDIENTS[key];
+        const slot = document.createElement("div");
+        slot.className = "mix-slot";
+        slot.title = ing.label;
+        slot.textContent = ing.emoji;
+        station.insertBefore(slot, station.querySelector(".mix-actions"));
+      });
+    }
+    document.getElementById("serve-btn").disabled = state.mix.length === 0 || state.queue.length === 0;
+  }
+
+  function renderShelf() {
+    const shelf = document.getElementById("shelf");
+    shelf.innerHTML = "";
+    unlockedIngredientKeys().sort().forEach(key => {
+      const ing = INGREDIENTS[key];
+      const btn = document.createElement("button");
+      btn.className = "ingredient-btn";
+      btn.innerHTML = `<span class="emoji">${ing.emoji}</span><span class="label">${ing.label}</span>`;
+      btn.disabled = state.queue.length === 0;
+      btn.addEventListener("click", () => addIngredient(key));
+      shelf.appendChild(btn);
+    });
+  }
+
+  function renderRecipeBook() {
+    const book = document.getElementById("recipe-book");
+    book.innerHTML = "";
+    unlockedDrinkKeys().forEach(key => {
+      const d = DRINKS[key];
+      const row = document.createElement("div");
+      row.className = "recipe-row";
+      row.innerHTML = `<span class="recipe-name">${d.emoji} ${d.name}</span><span>${d.ing.map(i => INGREDIENTS[i].emoji + " " + INGREDIENTS[i].label).join(" + ")}</span><span style="margin-left:auto;color:#8fef8f;">$${d.price}</span>`;
+      book.appendChild(row);
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Wire up events
+  // ---------------------------------------------------------------------
+  document.getElementById("start-btn").addEventListener("click", startDay);
+  document.getElementById("next-day-btn").addEventListener("click", nextDay);
+  document.getElementById("restart-btn").addEventListener("click", restartGame);
+  document.getElementById("serve-btn").addEventListener("click", serveDrink);
+  document.getElementById("clear-btn").addEventListener("click", clearMix);
+  document.getElementById("toggle-recipes").addEventListener("click", () => {
+    document.getElementById("recipe-book").classList.toggle("open");
+  });
+
+  // ---------------------------------------------------------------------
+  // Init
+  // ---------------------------------------------------------------------
+  state = freshState();
+  render();
+})();
+</script>
+</body>
+</html>
