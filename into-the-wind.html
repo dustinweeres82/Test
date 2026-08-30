@@ -11,6 +11,8 @@
   html, body { width:100%; height:100%; overflow:hidden; background:#101418;
                font-family:Georgia,'Iowan Old Style',serif; color:#4a3726; }
   canvas#c { display:block; position:fixed; inset:0; width:100%; height:100%; touch-action:none; }
+  canvas#ov { display:block; position:fixed; inset:0; width:100%; height:100%; pointer-events:none; }
+  body.pixel canvas#c { image-rendering:pixelated; image-rendering:crisp-edges; }
 
   /* ── cozy paper palette ───────────────────────────────────────────────── */
   :root {
@@ -157,6 +159,7 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+<canvas id="ov"></canvas>
 
 <div id="hud">
   <div id="badge"><canvas id="mini" width="132" height="132"></canvas></div>
@@ -407,11 +410,11 @@ function groundNormalY(x, z, h) {  /* cheap slope factor 0..1 (1 = flat) */
 }
 
 /* ── ground colours ──────────────────────────────────────────────────────── */
-var C_ROAD  = [199,155,101], C_ROAD2 = [178,132,84],
-    C_GRASS = [122,158,76],  C_GRASS2= [86,124,58],
-    C_DRY   = [206,182,112], C_DRY2  = [180,156,92],
-    C_ROCK  = [176,168,152], C_ROCK2 = [140,132,118],
-    C_VINE  = [96,124,60],   C_SOIL  = [172,116,74],
+var C_ROAD  = [206,150,86],  C_ROAD2 = [178,124,70],
+    C_GRASS = [140,168,64],  C_GRASS2= [78,120,46],
+    C_DRY   = [216,186,92],  C_DRY2  = [188,158,74],
+    C_ROCK  = [184,166,158], C_ROCK2 = [146,126,120],
+    C_VINE  = [92,126,52],   C_SOIL  = [176,112,66],
     C_SAND  = [214,186,132];
 function groundColor(x, z, h, slope, cell) {
   var c = cell || 8;
@@ -457,19 +460,51 @@ function groundColor(x, z, h, slope, cell) {
    ═══════════════════════════════════════════════════════════════════════════ */
 var cv = document.getElementById('c'), ctx = cv.getContext('2d', { alpha: false });
 var W = 800, H = 450, HW = 400, HH = 225, DPR = 1, FOCAL = 500, FOV = 1.12;
+/* a small tiling noise tile, overlaid to break up the flat fills */
+var grainPat = null;
+function buildGrain() {
+  var GRAIN = 64;
+  var g = document.createElement('canvas');
+  g.width = g.height = GRAIN;
+  var gc = g.getContext('2d'), img = gc.createImageData(GRAIN, GRAIN), rnd = rngFrom(1234);
+  for (var i = 0; i < GRAIN * GRAIN; i++) {
+    var v = 96 + (rnd() * 72 | 0);
+    img.data[i*4] = v; img.data[i*4+1] = v; img.data[i*4+2] = v; img.data[i*4+3] = 255;
+  }
+  gc.putImageData(img, 0, 0);
+  grainPat = ctx.createPattern(g, 'repeat');
+}
 var qUser = 0, qAdapt = 1;      /* qUser: 0 auto, 1 crisp, 2 fast */
+/* Pixel mode: render the world into a small buffer and let the browser blow it
+   up with nearest-neighbour. No anti-aliasing, hard pixel edges — and a tenth
+   of the fill cost, which pays for a lot more geometry. */
+var pixelMode = true, PIXEL_H = 250, UPS = 1;
+var ov = document.getElementById('ov'), octx = ov.getContext('2d');
+var OW = 800, OH = 450;
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   var vw = window.innerWidth, vh = window.innerHeight;
-  /* hold the pixel budget near 2.2 Mpx so big and retina displays stay smooth */
-  var q = Math.min(1, Math.sqrt(2200000 / Math.max(1, vw * vh * DPR * DPR)));
-  if (qUser === 1) q = Math.min(1, q * 1.35);
-  else if (qUser === 2) q *= 0.62;
-  else q *= qAdapt;
-  q = clamp(q, 0.30, 1);
-  W = Math.round(vw * DPR * q); H = Math.round(vh * DPR * q);
+  ov.width = OW = Math.round(vw * DPR); ov.height = OH = Math.round(vh * DPR);
+  ov.style.width = vw + 'px'; ov.style.height = vh + 'px';
+  if (pixelMode) {
+    document.body.classList.add('pixel');
+    var target = PIXEL_H * (qUser === 1 ? 1.45 : qUser === 2 ? 0.72 : qAdapt);
+    H = Math.max(180, Math.round(target));
+    W = Math.round(H * vw / vh);
+  } else {
+    document.body.classList.remove('pixel');
+    var q = Math.min(1, Math.sqrt(2200000 / Math.max(1, vw * vh * DPR * DPR)));
+    if (qUser === 1) q = Math.min(1, q * 1.35);
+    else if (qUser === 2) q *= 0.62;
+    else q *= qAdapt;
+    q = clamp(q, 0.30, 1);
+    W = Math.round(vw * DPR * q); H = Math.round(vh * DPR * q);
+  }
   cv.width = W; cv.height = H; cv.style.width = vw + 'px'; cv.style.height = vh + 'px';
+  ctx.imageSmoothingEnabled = false;
   HW = W / 2; HH = H / 2; FOCAL = HH / Math.tan(FOV / 2);
+  UPS = OW / W;
+  buildGrain();
 }
 window.addEventListener('resize', resize); resize();
 
@@ -486,6 +521,18 @@ function setCamBasis() {
 }
 /* two painter layers: 0 = the ground itself, 1 = everything standing on it.
    Sorting them separately stops a near ground quad from painting over Aires. */
+/* world-space labels are collected here and drawn at full resolution */
+var LABELS = [], LABELn = 0;
+function pushLabel(fn) { if (LABELn < LABELS.length) LABELS[LABELn] = fn; else LABELS.push(fn); LABELn++; }
+/* only worth a label if its anchor is actually on screen */
+function labelVisible(sx, sy) { return sx > -8 && sx < W + 8 && sy > -40 && sy < H + 40; }
+function drawLabels() {
+  octx.clearRect(0, 0, OW, OH);
+  octx.textAlign = 'center';
+  for (var i = 0; i < LABELn; i++) LABELS[i](octx, UPS);
+  octx.textAlign = 'left';
+  LABELn = 0;
+}
 var DL = [], DLn = 0, DL0 = [], DL0n = 0;
 function dlPush(d, item, layer) {
   item.d = d;
@@ -543,7 +590,7 @@ function emitPoly(v3, col, opt) {
   }
   /* never hand the rasteriser a polygon that is off screen or smaller than a few pixels */
   if (maxx < 0 || minx > W || maxy < 0 || miny > H) return;
-  if ((maxx - minx) * (maxy - miny) < 5) return;
+  if ((maxx - minx) * (maxy - miny) < (pixelMode ? 1.2 : 5)) return;
   var depth = (opt && opt.depth) || zsum / k;
   dlPush(depth, { p: pts, c: css(fogc(col, zsum / k)), s: !!(opt && opt.layer === 0), a: opt && opt.alpha },
          opt && opt.layer);
@@ -674,7 +721,7 @@ function drawRidges() {
 }
 
 /* ── terrain: nested LOD rings of flat-shaded quads ──────────────────────── */
-var LOD = [ [8,8], [16,6], [32,6], [64,6], [128,6], [256,4] ];
+var LOD = [ [6,8], [12,6], [24,6], [48,6], [96,6], [192,6], [384,4] ];
 var COS_CULL = -0.30;
 function drawTerrain() {
   var covX0 = 0, covX1 = 0, covZ0 = 0, covZ1 = 0, have = false;
@@ -1035,12 +1082,12 @@ function propDist(p) { var dx = p.x - camX, dz = p.z - camZ; return Math.sqrt(dx
 
 function drawPine(p) {
   var d = propDist(p);
-  if (d > 165) return drawPineFar(p);
-  var lod = d < 78, segs = lod ? 8 : 6, tiers = lod ? 5 : 3;
+  if (d > 300) return drawPineFar(p);
+  var lod = d < 130, segs = lod ? 8 : 6, tiers = lod ? 5 : 4;
   var h = p.h, trunkH = h * 0.20, tw = h * 0.030;
   shadowAt(p.x, p.y, p.z, h * 0.24, 0.30);
   meshPrism(p.x, p.y, p.z, tw, trunkH * 1.15, 6, C_BARK, null, d, p.seed * 0.7, 0.8);
-  var greens = [[92,132,66],[74,116,56],[60,100,50]];
+  var greens = [[96,142,60],[72,118,50],[52,98,44]];
   for (var t = 0; t < tiers; t++) {
     var f = t / tiers;
     var base = p.y + trunkH + f * (h - trunkH) * 0.80;
@@ -1050,49 +1097,49 @@ function drawPine(p) {
 }
 function drawCypress(p) {
   var d = propDist(p);
-  if (d > 165) return drawCypressFar(p);
-  var lod = d < 78, segs = lod ? 7 : 5;
+  if (d > 300) return drawCypressFar(p);
+  var lod = d < 130, segs = lod ? 8 : 6;
   var h = p.h, r = h * 0.13;
   shadowAt(p.x, p.y, p.z, r * 1.6, 0.32);
   meshPrism(p.x, p.y, p.z, r * 0.35, h * 0.16, 6, C_BARK, null, d, p.seed, 0.9);
   /* a fat lower cone with a slim spire on top reads as a cypress */
-  meshPrism(p.x, p.y + h * 0.10, p.z, r, h * 0.44, segs, [56,96,54], null, d, p.seed * 0.3, 0.86);
-  meshCone(p.x, p.y + h * 0.54, p.z, r * 0.86, h * 0.50, segs, [48,88,50], d, p.seed * 0.3);
+  meshPrism(p.x, p.y + h * 0.10, p.z, r, h * 0.44, segs, [48,92,50], null, d, p.seed * 0.3, 0.86);
+  meshCone(p.x, p.y + h * 0.54, p.z, r * 0.86, h * 0.50, segs, [40,80,44], d, p.seed * 0.3);
 }
 function drawBroad(p) {
   var d = propDist(p);
-  if (d > 165) return drawBroadFar(p);
-  var h = p.h, lod = d < 78;
+  if (d > 300) return drawBroadFar(p);
+  var h = p.h, lod = d < 130;
   shadowAt(p.x, p.y, p.z, h * 0.34, 0.30);
   meshPrism(p.x, p.y, p.z, h * 0.055, h * 0.46, 6, C_BARK, null, d, p.seed, 0.8);
   var cy = p.y + h * 0.66, rr = h * 0.34;
-  meshBlob(p.x, cy, p.z, rr, rr * 0.86, rr, p.seed * 13 + 1, [86,126,62], d, 0.8);
+  meshBlob(p.x, cy, p.z, rr, rr * 0.86, rr, p.seed * 13 + 1, [88,132,56], d, 0.8);
   if (lod) {
     meshBlob(p.x - rr * 0.62, cy + rr * 0.30, p.z + rr * 0.24, rr * 0.62, rr * 0.56, rr * 0.62,
-             p.seed * 7 + 5, [104,146,70], d - 0.02, 0.9);
+             p.seed * 7 + 5, [112,154,64], d - 0.02, 0.9);
     meshBlob(p.x + rr * 0.54, cy - rr * 0.10, p.z - rr * 0.30, rr * 0.56, rr * 0.52, rr * 0.56,
-             p.seed * 3 + 9, [70,110,56], d + 0.02, 0.9);
+             p.seed * 3 + 9, [66,110,48], d + 0.02, 0.9);
   }
 }
 function drawBush(p) {
   var d = propDist(p);
-  if (d > 120) return drawBushFar(p);
+  if (d > 210) return drawBushFar(p);
   var h = p.h;
-  meshBlob(p.x, p.y + h * 0.52, p.z, h * 0.55, h * 0.50, h * 0.55, p.seed * 5 + 3, [84,120,58], d, 0.8);
+  meshBlob(p.x, p.y + h * 0.52, p.z, h * 0.55, h * 0.50, h * 0.55, p.seed * 5 + 3, [88,126,52], d, 0.8);
   if (p.flower && d < 70)
     meshBlob(p.x + h * 0.18, p.y + h * 0.85, p.z, h * 0.24, h * 0.19, h * 0.24, p.seed + 2,
              p.flower === 1 ? [230,152,182] : [234,212,146], d - 0.02, 0.8);
 }
 function drawRock(p) {
   var d = propDist(p);
-  if (d > 150) return drawRockFar(p);
+  if (d > 260) return drawRockFar(p);
   var h = p.h;
   shadowAt(p.x, p.y, p.z, h * 0.7, 0.28);
   meshBlob(p.x, p.y + h * 0.34, p.z, h * 0.72, h * 0.52, h * 0.64, p.seed * 11 + 7, [172,168,158], d, 0.35);
 }
 function drawLog(p) {
   var d = propDist(p);
-  if (d > 150) return;
+  if (d > 260) return;
   shadowAt(p.x, p.y, p.z, p.h * 0.9, 0.28);
   meshLog(p.x, p.y, p.z, p.yaw, p.h * 0.26, p.h * 2.1, C_BARK2, C_GRAIN, d);
 }
@@ -1144,7 +1191,7 @@ function cellProps(ci, cj) {
   propCache[key] = list; propCacheN++;
   return list;
 }
-var PROP_FAR = 270;
+var PROP_FAR = 430;
 function drawScatter() {
   var ci0 = Math.floor((camX - PROP_FAR) / SC), ci1 = Math.floor((camX + PROP_FAR) / SC);
   var cj0 = Math.floor((camZ - PROP_FAR) / SC), cj1 = Math.floor((camZ + PROP_FAR) / SC);
@@ -1246,7 +1293,7 @@ function buildVillages() {
 /* ── prop geometry ───────────────────────────────────────────────────────── */
 function drawBuilding(o) {
   var dd = dist2(o.x, o.z, camX, camZ);
-  if (dd > 460) return;
+  if (dd > 620) return;
   var B = basis(o.yaw, 0, 0), org = [o.x, o.y, o.z];
   if (o.kind === 'house') {
     var h = o.h * o.storeys;
@@ -1271,13 +1318,14 @@ function drawBuilding(o) {
   } else if (o.kind === 'signpost') {
     drawBox(B, org, 0, 1.35, 0, 0.08, 1.35, 0.08, [92,86,78]);
     drawBox(B, org, 0.85, 2.35, 0, 0.85, 0.26, 0.05, [72,60,50]);
-    sprite(o.x, o.y + 2.35, o.z, function (sx, sy, sc, ft) {
-      if (sc < 4) return;
-      ctx.fillStyle = 'rgba(246,238,222,' + (1 - ft) + ')';
-      ctx.font = 'bold ' + clamp(sc * 0.42, 6, 26) + 'px Georgia, serif';
-      ctx.textAlign = 'center'; ctx.fillText(o.label.toUpperCase(), sx + sc * 0.85, sy + sc * 0.14);
-      ctx.textAlign = 'left';
-    }, -1);
+    if (project(o.x, o.y + 2.35, o.z) && _ps > 3 && labelVisible(_px, _py)) {
+      var lx = _px, ly = _py, lsc = _ps, lft = clamp((_pd - FOGSTART) / (FAR - FOGSTART), 0, 1);
+      pushLabel(function (g, u) {
+        g.fillStyle = 'rgba(250,244,230,' + (1 - lft) + ')';
+        g.font = 'bold ' + clamp(lsc * u * 0.40, 9, 30) + 'px Georgia, serif';
+        g.fillText(o.label.toUpperCase(), (lx + lsc * 0.85) * u, (ly + lsc * 0.14) * u);
+      });
+    }
   } else if (o.kind === 'awning') {
     drawBox(B, org, 0, 1.2, 0, 1.6, 0.1, 1.1, C_WOOD);
     drawBox(B, org, -1.5, 0.6, 0, 0.08, 0.6, 0.08, C_WOOD);
@@ -1329,7 +1377,7 @@ function drawBuilding(o) {
 function drawVillages() {
   for (var i = 0; i < BUILDINGS.length; i++) {
     var o = BUILDINGS[i], dx = o.x - camX, dz = o.z - camZ, dd = Math.sqrt(dx * dx + dz * dz);
-    if (dd > 460) continue;
+    if (dd > 620) continue;
     if (dd > 40 && (dx * fx + dz * fz) / dd < COS_CULL) continue;
     if (dd > 40 && !visible(o.x, o.y + (o.kind === 'house' ? o.h * o.storeys * 0.55 : 1.2), o.z)) continue;
     drawBuilding(o);
@@ -2367,7 +2415,7 @@ var SPECIES = {
 };
 function drawCritter(c) {
   var dx = c.x - camX, dz = c.z - camZ, d = Math.sqrt(dx * dx + dz * dz);
-  if (d > 230) return;
+  if (d > 330) return;
   if (d > 30 && (dx * fx + dz * fz) / d < COS_CULL) return;
   if (d > 40 && !visible(c.x, c.y + 0.8, c.z)) return;
   var sp = SPECIES[c.species], sc = sp.h * (c.scale || 1);
@@ -2378,21 +2426,21 @@ function drawCritter(c) {
   var B = basis(yawUsed, 0, 0);
   B.yaw0 = c.yaw; B.yawUsed = yawUsed;
   shadowAt(c.x, c.y, c.z, 0.34 * sc, 0.30);
-  drawVillager(B, [c.x, c.y + idle, c.z], sc, sp.p, walk, d < 42 ? 2 : (d < 110 ? 1 : 0), d);
+  drawVillager(B, [c.x, c.y + idle, c.z], sc, sp.p, walk, d < 65 ? 2 : (d < 175 ? 1 : 0), d);
   if (c.name && (c.quest ? d < 40 : c === nearestNamed) && d < 46) {   /* who is that? */
     var yTop = c.y + 1.28 * sc;
-    if (project(c.x, yTop, c.z)) {
+    if (project(c.x, yTop, c.z) && labelVisible(_px, _py)) {
       var sx = _px, sy = _py, dd = _pd;
-      dlPush(-2, { f: function () {
+      pushLabel(function (g, u) {
         var a = clamp(1 - (dd - 30) / 18, 0.15, 1);
-        ctx.globalAlpha = a; ctx.font = '12px Georgia, serif'; ctx.textAlign = 'center';
-        var w = ctx.measureText(c.name).width;
-        ctx.fillStyle = 'rgba(32,22,14,.5)';
-        ctx.fillRect(sx - w / 2 - 5, sy - 15, w + 10, 17);
-        ctx.fillStyle = c.quest ? '#ffd9a0' : '#fff4e0';
-        ctx.fillText(c.name, sx, sy - 3);
-        ctx.textAlign = 'left'; ctx.globalAlpha = 1;
-      } });
+        g.globalAlpha = a; g.font = '14px Georgia, serif';
+        var w = g.measureText(c.name).width;
+        g.fillStyle = 'rgba(32,22,14,.5)';
+        g.fillRect(sx * u - w / 2 - 6, sy * u - 19, w + 12, 20);
+        g.fillStyle = c.quest ? '#ffd9a0' : '#fff4e0';
+        g.fillText(c.name, sx * u, sy * u - 5);
+        g.globalAlpha = 1;
+      });
     }
   }
 }
@@ -3094,23 +3142,21 @@ function drawWaypoints() {
     var L2 = nearestLoc();
     if (L2) {
       var rec = recipientAt(L2);
-      if (project(rec.x, rec.y + 1.9, rec.z)) {
+      if (project(rec.x, rec.y + 1.9, rec.z) && labelVisible(_px, _py)) {
         var rx2 = _px, ry2 = _py, nm = rec.name;
         var rd2 = dist2(FOOT.x, FOOT.z, rec.x, rec.z);
-        dlPush(-3, { f: function () {
-          var bob = Math.sin(gTime * 3) * 3;
-          ctx.fillStyle = '#c1452f';
-          ctx.beginPath();
-          ctx.moveTo(rx2, ry2 + bob); ctx.lineTo(rx2 + 7, ry2 - 9 + bob);
-          ctx.lineTo(rx2, ry2 - 18 + bob); ctx.lineTo(rx2 - 7, ry2 - 9 + bob);
-          ctx.closePath(); ctx.fill();
-          ctx.strokeStyle = 'rgba(255,245,225,.9)'; ctx.lineWidth = 1.5; ctx.stroke();
-          ctx.font = '12px Georgia, serif'; ctx.textAlign = 'center';
-          var t = nm + '  ' + Math.round(rd2) + ' m', w = ctx.measureText(t).width;
-          ctx.fillStyle = 'rgba(30,22,14,.55)'; ctx.fillRect(rx2 - w/2 - 5, ry2 - 38 + bob, w + 10, 17);
-          ctx.fillStyle = '#fff4e0'; ctx.fillText(t, rx2, ry2 - 26 + bob);
-          ctx.textAlign = 'left';
-        } });
+        pushLabel(function (g, u) {
+          var bob = Math.sin(gTime * 3) * 4, X = rx2 * u, Y = ry2 * u + bob;
+          g.fillStyle = '#c1452f';
+          g.beginPath();
+          g.moveTo(X, Y); g.lineTo(X + 9, Y - 12); g.lineTo(X, Y - 24); g.lineTo(X - 9, Y - 12);
+          g.closePath(); g.fill();
+          g.strokeStyle = 'rgba(255,245,225,.9)'; g.lineWidth = 2; g.stroke();
+          g.font = '14px Georgia, serif';
+          var t = nm + '  ' + Math.round(rd2) + ' m', w = g.measureText(t).width;
+          g.fillStyle = 'rgba(30,22,14,.55)'; g.fillRect(X - w/2 - 6, Y - 50, w + 12, 20);
+          g.fillStyle = '#fff4e0'; g.fillText(t, X, Y - 36);
+        });
       }
     }
   }
@@ -3118,26 +3164,26 @@ function drawWaypoints() {
     var L = loc(HOLD[i].to);
     if (seen[L.id]) continue; seen[L.id] = 1;
     var y = (L.y || groundH(L.x, L.z)) + 26;
-    if (!project(L.x, y, L.z)) continue;
+    if (!project(L.x, y, L.z) || !labelVisible(_px, _py)) continue;
     var sx = _px, sy = _py, d = _pd;
     (function (sx, sy, d, name) {
-      dlPush(-1, { f: function () {
-        var bob = Math.sin(gTime * 2.2) * 4, a = clamp(1 - d / 2600, 0.25, 1);
-        if (sy - 44 + bob < 96) bob = 96 + 44 - sy;   /* keep clear of the objective bar */
-        ctx.globalAlpha = a;
-        ctx.fillStyle = '#c1452f';
-        ctx.beginPath();
-        ctx.moveTo(sx, sy + bob); ctx.lineTo(sx + 9, sy - 11 + bob);
-        ctx.lineTo(sx, sy - 22 + bob); ctx.lineTo(sx - 9, sy - 11 + bob);
-        ctx.closePath(); ctx.fill();
-        ctx.strokeStyle = 'rgba(255,245,225,.85)'; ctx.lineWidth = 1.6; ctx.stroke();
-        ctx.font = '13px Georgia, serif'; ctx.textAlign = 'center';
-        ctx.fillStyle = 'rgba(30,22,14,.55)';
-        var t = name + '  ' + Math.round(d) + ' m', tw = ctx.measureText(t).width;
-        ctx.fillRect(sx - tw / 2 - 6, sy - 44 + bob, tw + 12, 18);
-        ctx.fillStyle = '#fff4e0'; ctx.fillText(t, sx, sy - 31 + bob);
-        ctx.textAlign = 'left'; ctx.globalAlpha = 1;
-      } });
+      pushLabel(function (g, u) {
+        var a = clamp(1 - d / 2600, 0.25, 1);
+        var X = sx * u, Y = sy * u + Math.sin(gTime * 2.2) * 5;
+        if (Y - 52 < 108) Y = 160;                    /* keep clear of the objective bar */
+        g.globalAlpha = a;
+        g.fillStyle = '#c1452f';
+        g.beginPath();
+        g.moveTo(X, Y); g.lineTo(X + 11, Y - 13); g.lineTo(X, Y - 26); g.lineTo(X - 11, Y - 13);
+        g.closePath(); g.fill();
+        g.strokeStyle = 'rgba(255,245,225,.85)'; g.lineWidth = 2; g.stroke();
+        g.font = '15px Georgia, serif';
+        var t = name + '  ' + Math.round(d) + ' m', tw = g.measureText(t).width;
+        g.fillStyle = 'rgba(30,22,14,.55)';
+        g.fillRect(X - tw / 2 - 7, Y - 52, tw + 14, 21);
+        g.fillStyle = '#fff4e0'; g.fillText(t, X, Y - 37);
+        g.globalAlpha = 1;
+      });
     })(sx, sy, d, L.name);
   }
 }
@@ -3226,6 +3272,21 @@ function overlay() {
   var vg = ctx.createRadialGradient(HW, HH, Math.min(W, H) * 0.42, HW, HH, Math.max(W, H) * 0.78);
   vg.addColorStop(0, 'rgba(40,26,14,0)'); vg.addColorStop(1, 'rgba(40,26,14,.30)');
   ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+
+  if (pixelMode) {
+    /* paper grain, so the flat fills read as painted rather than plastic */
+    if (grainPat) {
+      ctx.globalCompositeOperation = 'overlay';
+      ctx.globalAlpha = 0.30;
+      ctx.fillStyle = grainPat; ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    }
+    /* colour grade: lift the warm end, deepen the shadows a touch */
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.fillStyle = 'rgba(255,214,150,0.10)'; ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  drawLabels();
 }
 var last = 0, acc = 0;
 function frame(now) {
@@ -3261,7 +3322,7 @@ function frame(now) {
 var qSamples = 0, qAccum = 0, qCool = 0;
 function autoQuality(dt) {
   qCool -= dt;
-  if (qUser !== 0) return;
+  if (qUser !== 0 || pixelMode) return;   /* a shifting pixel grid is worse than a slow one */
   qAccum += dt; qSamples++;
   if (qSamples < 45) return;
   var avg = qAccum / qSamples; qAccum = 0; qSamples = 0;
@@ -3297,6 +3358,11 @@ function settingsSheet() {
     opts.push({ t: qNames[n], right: qUser === n ? 'on' : '', dis: qUser === n,
       fn: function () { qUser = n; qAdapt = 1; resize(); settingsSheet(); } });
   })(i);
+  opts.push({ t: 'Look: ' + (pixelMode ? 'pixel' : 'smooth'),
+    right: pixelMode ? 'crunchy' : 'clean',
+    d: pixelMode ? 'Rendered small and blown up with no smoothing, with paper grain over the top.'
+                 : 'Full resolution, smooth edges, no grain.',
+    fn: function () { pixelMode = !pixelMode; qAdapt = 1; resize(); settingsSheet(); } });
   opts.push({ rule: true });
   opts.push({ t: 'Flight stick: ' + (invertFly ? 'inverted' : 'direct'),
     right: invertFly ? 'pull back to climb' : 'press up to climb',
