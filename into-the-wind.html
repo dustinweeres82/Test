@@ -220,7 +220,7 @@
     take to the air when your load is light enough, chase off sky pirates, and earn your way to a race engine.</div>
   <div class="keys">
     <kbd>W</kbd><kbd>S</kbd> throttle / brake &nbsp;&middot;&nbsp; <kbd>A</kbd><kbd>D</kbd> steer &amp; roll &nbsp;&middot;&nbsp;
-    <kbd>&#8593;</kbd><kbd>&#8595;</kbd> pitch in flight<br>
+    <kbd>&#8595;</kbd> climb <kbd>&#8593;</kbd> dive in flight<br>
     <kbd>Space</kbd> take off &amp; land &nbsp;&middot;&nbsp; <kbd>F</kbd> fire machine gun &nbsp;&middot;&nbsp;
     <kbd>E</kbd> interact &nbsp;&middot;&nbsp; <kbd>M</kbd> map &nbsp;&middot;&nbsp; <kbd>Esc</kbd> back
   </div>
@@ -761,13 +761,37 @@ function drawRoof(B, o, ox, oy, oz, sx, ridgeH, sz, col, eave) {
   }
 }
 /* is a world point in the open, or hidden behind a ridge? cheap ray march */
+/* A coarse max-height grid of the whole valley, built once. Marching a ray
+   against it tells us whether a hill stands between the camera and a thing —
+   sampling the terrain function directly was too slow to do properly, and the
+   loose version let whole villages show through ridges. */
+var HG_CELL = 14, HG_MIN = -1700, HG_N = Math.ceil(3400 / HG_CELL), HG = null;
+function buildHeightGrid() {
+  HG = new Float32Array(HG_N * HG_N);
+  for (var i = 0; i < HG_N; i++) {
+    for (var j = 0; j < HG_N; j++) {
+      var x0 = HG_MIN + i * HG_CELL, z0 = HG_MIN + j * HG_CELL, c = HG_CELL;
+      var m = groundH(x0 + c * 0.5, z0 + c * 0.5);
+      m = Math.max(m, groundH(x0, z0), groundH(x0 + c, z0), groundH(x0, z0 + c), groundH(x0 + c, z0 + c));
+      HG[i * HG_N + j] = m;
+    }
+  }
+}
+function terrainCeil(x, z) {
+  var i = (x - HG_MIN) / HG_CELL | 0, j = (z - HG_MIN) / HG_CELL | 0;
+  if (i < 0 || j < 0 || i >= HG_N || j >= HG_N) return -9999;
+  return HG[i * HG_N + j];
+}
+/* is this point in the open, or behind a ridge? */
 function visible(x, y, z) {
+  if (!HG) return true;
   var dx = x - camX, dy = y - camY, dz = z - camZ;
   var d = Math.sqrt(dx * dx + dz * dz);
-  if (d < 110) return true;
-  for (var i = 2; i <= 7; i++) {
-    var t = i / 8;
-    if (baseH(camX + dx * t, camZ + dz * t) > camY + dy * t + 4) return false;
+  if (d < 34) return true;
+  var steps = clamp(Math.ceil(d / HG_CELL), 4, 26);
+  for (var i = 1; i < steps; i++) {
+    var t = i / steps;
+    if (terrainCeil(camX + dx * t, camZ + dz * t) > camY + dy * t + 1.6) return false;
   }
   return true;
 }
@@ -794,7 +818,9 @@ function emitFaceC(v, col, dd, ox, oy, oz) {
   cx /= n; cy /= n; cz /= n;
   if ((cx - ox) * nx + (cy - oy) * ny + (cz - oz) * nz < 0) { nx = -nx; ny = -ny; nz = -nz; }
   if ((cx - camX) * nx + (cy - camY) * ny + (cz - camZ) * nz > 0) return;   /* backface */
-  emitPoly(v, lit(col, nx, ny, nz), { depth: dd, seam: true });
+  /* per-face depth, so mesh faces interleave correctly with the box details
+     (eyes, feet, trim) that are sorted the same way */
+  emitPoly(v, lit(col, nx, ny, nz), { seam: true });
 }
 /* a cone: the building block of every conifer in the valley */
 function meshCone(x, y, z, r, h, segs, col, dd, twist) {
@@ -1129,7 +1155,7 @@ function drawScatter() {
       if (dd > PROP_FAR) continue;
       if (dd > 30 && (mx * fx + mz * fz) / dd < COS_CULL) continue;
       var cxw = (i + 0.5) * SC, czw = (j + 0.5) * SC;
-      if (dd > 110 && !visible(cxw, groundH(cxw, czw) + 6, czw)) continue;
+      if (dd > 40 && !visible(cxw, groundH(cxw, czw) + 4.5, czw)) continue;
       var ps = cellProps(i, j);
       for (var k = 0; k < ps.length; k++) PROPDRAW[ps[k].type](ps[k]);
     }
@@ -1305,7 +1331,7 @@ function drawVillages() {
     var o = BUILDINGS[i], dx = o.x - camX, dz = o.z - camZ, dd = Math.sqrt(dx * dx + dz * dz);
     if (dd > 460) continue;
     if (dd > 40 && (dx * fx + dz * fz) / dd < COS_CULL) continue;
-    if (dd > 130 && !visible(o.x, o.y + 5, o.z)) continue;
+    if (dd > 40 && !visible(o.x, o.y + (o.kind === 'house' ? o.h * o.storeys * 0.55 : 1.2), o.z)) continue;
     drawBuilding(o);
   }
 }
@@ -1379,11 +1405,12 @@ function drawAires() {
   var gy = groundH(P.x, P.z);
   shadowAt(P.x, gy, P.z, 2.0 + w * 2.4, clamp(0.40 - (P.y - gy) * 0.014, 0.06, 0.40));
 
-  /* ── running gear ── */
-  drawBox(B, o, 0, 0.46, -1.10, 0.16, 0.46, 0.46, C_DARK);          /* rear wheel  */
-  drawBox(B, o, 0, 0.46, -1.10, 0.19, 0.17, 0.17, C_METAL);         /* hub         */
-  drawBox(B, o, 0, 0.44, 1.20, 0.14, 0.44, 0.44, C_DARK);           /* front wheel */
-  drawBox(B, o, 0, 0.44, 1.20, 0.17, 0.15, 0.15, C_METAL);
+  /* ── running gear: proper turned wheels ── */
+  var dd0 = dist2(P.x, P.z, camX, camZ) + 1;
+  meshPrismB(B, o, 0, 0.46, -1.10, 0.46, 0.15, 12, 'x', C_DARK, [64,58,54], dd0);
+  meshPrismB(B, o, 0, 0.46, -1.10, 0.19, 0.17, 8, 'x', C_METAL, [206,200,188], dd0);
+  meshPrismB(B, o, 0, 0.44, 1.20, 0.44, 0.13, 12, 'x', C_DARK, [64,58,54], dd0);
+  meshPrismB(B, o, 0, 0.44, 1.20, 0.17, 0.15, 8, 'x', C_METAL, [206,200,188], dd0);
   drawBox(B, o, 0.20, 0.86, 1.16, 0.05, 0.42, 0.05, C_METAL);       /* forks       */
   drawBox(B, o, -0.20, 0.86, 1.16, 0.05, 0.42, 0.05, C_METAL);
   drawBox(B, o, 0, 1.02, 1.20, 0.24, 0.10, 0.34, C_RED);            /* front guard */
@@ -1395,9 +1422,9 @@ function drawAires() {
   drawBox(B, o, -0.27, 0.80, -0.06, 0.06, 0.22, 0.72, C_RED2);
   drawBox(B, o, 0.34, 0.62, -0.30, 0.10, 0.10, 0.62, C_METAL);      /* exhaust      */
   drawBox(B, o, -0.34, 0.62, -0.30, 0.10, 0.10, 0.62, C_METAL);
-  drawBox(B, o, 0, 1.12, 0.16, 0.32, 0.26, 0.66, C_RED);            /* fuel tank    */
+  meshBlobB(B, o, 0, 1.12, 0.16, 0.34, 0.28, 0.68, 7, C_RED, dd0, 0, 0.10);   /* fuel tank */
   drawBox(B, o, 0, 1.16, 0.20, 0.34, 0.09, 0.30, C_CREAM);          /* tank flash   */
-  drawBox(B, o, 0, 1.08, 0.92, 0.33, 0.34, 0.36, C_RED2);           /* nose cowl    */
+  meshBlobB(B, o, 0, 1.10, 0.94, 0.34, 0.34, 0.40, 13, C_RED2, dd0, 0, 0.10); /* nose cowl */
   drawBox(B, o, 0, 1.30, 1.06, 0.22, 0.12, 0.22, C_CREAM);
   drawBox(B, o, 0, 1.16, 1.28, 0.15, 0.15, 0.10, [252,242,198]);    /* headlamp     */
   drawBox(B, o, 0, 1.44, 0.72, 0.46, 0.05, 0.05, C_METAL);          /* handlebars   */
@@ -1444,7 +1471,7 @@ function drawAires() {
   drawBox(B, o, -0.26, 1.30, -0.32, 0.10, 0.24, 0.14, C_CREAM);
   drawBox(B, o, 0.27, 1.62 - crouch, 0.20, 0.07, 0.07, 0.44, C_CREAM);       /* arms */
   drawBox(B, o, -0.27, 1.62 - crouch, 0.20, 0.07, 0.07, 0.44, C_CREAM);
-  drawBox(B, o, 0, 2.08 - crouch, -0.22 + crouch, 0.15, 0.15, 0.15, C_SKIN);
+  meshBlobB(B, o, 0, 2.08 - crouch, -0.22 + crouch, 0.16, 0.16, 0.16, 21, C_SKIN, dd0, 0, 0.09);
   drawBox(B, o, 0, 2.20 - crouch, -0.24 + crouch, 0.17, 0.09, 0.17, [196,74,58]);
   drawBox(B, o, 0, 2.10 - crouch, -0.08 + crouch, 0.13, 0.06, 0.05, [138,178,196]); /* goggles */
 
@@ -1467,7 +1494,7 @@ function drawWalker() {
   var sp = SPECIES.rider, sc = sp.h;
   var B = basis(FOOT.yaw, 0, 0);
   shadowAt(FOOT.x, groundH(FOOT.x, FOOT.z), FOOT.z, 0.36 * sc, 0.34);
-  drawVillager(B, [FOOT.x, FOOT.y, FOOT.z], sc, sp.p, FOOT.walk, false);
+  drawVillager(B, [FOOT.x, FOOT.y, FOOT.z], sc, sp.p, FOOT.walk, 2, 8);
   if (FOOT.carry) {
     var j = FOOT.carry, o = [FOOT.x, FOOT.y, FOOT.z];
     var hh = 0.14 + Math.min(j.weight, 90) * 0.0022;
@@ -1812,6 +1839,7 @@ function restSheet(quality, cost, where) {
 /* ═══════════════════════════════════════════════════════════════════════════
    9. INPUT
    ═══════════════════════════════════════════════════════════════════════════ */
+var invertFly = true;   /* pull back to climb, like a real stick */
 var K = {}, spacePulse = false, touchMode = false, tStick = { x: 0, y: 0, on: false, id: -1 };
 var tBtn = { gas: false, brk: false, act: false, act2: false };
 window.addEventListener('keydown', function (e) {
@@ -1876,6 +1904,7 @@ function inputs() {
     if (tBtn.act) { if (P.flying) i.fire = true; else i.act = true; }
   }
   i.steer = clamp(i.steer, -1, 1);
+  if (invertFly) i.pitch = -i.pitch;
   return i;
 }
 function nearPad() {
@@ -2031,7 +2060,7 @@ function updatePlayer(dt) {
 
     var authority = clamp((P.spd - 6) / 22, 0.1, 1);
     P.pitch += I.pitch * 1.35 * authority * dt;
-    if (I.act) P.pitch = lerp(P.pitch, -0.12, 2.2 * dt);      /* space = settle for landing */
+    if (I.act) P.pitch = lerp(P.pitch, -0.17, 2.6 * dt);      /* space = settle for landing */
     P.pitch = clamp(P.pitch, -1.05, 1.05);
     P.roll = lerp(P.roll, clamp(I.steer, -1, 1) * 1.05, 3.2 * dt);
     /* banked turns */
@@ -2110,94 +2139,199 @@ function ptOf(B, o, x, y, z) {
           o[2] + B.r[2]*x + B.u[2]*y + B.f[2]*z];
 }
 
+/* ── mesh primitives in a character's own frame ──────────────────────────── */
+function localAxis(axis, u, v, w) {                 /* (ring u,v · length w) → local xyz */
+  if (axis === 'x') return [w, u, v];
+  if (axis === 'z') return [u, v, w];
+  return [u, w, v];                                  /* 'y' */
+}
+function meshBlobB(B, o, ox, oy, oz, rx, ry, rz, seed, col, dd, squash, jit) {
+  var rnd = rngFrom(seed), pts = [], i, jr = jit === undefined ? 0.24 : jit;
+  for (i = 0; i < ICO_V.length; i++) {
+    var j = (1 - jr / 2) + rnd() * jr, vy = ICO_V[i][1];
+    if (squash) vy = vy < 0 ? vy * squash : vy;
+    pts.push(ptOf(B, o, ox + ICO_V[i][0] * rx * j, oy + vy * ry * j, oz + ICO_V[i][2] * rz * j));
+  }
+  var c = ptOf(B, o, ox, oy, oz);
+  for (i = 0; i < ICO_F.length; i++) {
+    var F = ICO_F[i], a = pts[F[0]], b = pts[F[1]], q = pts[F[2]];
+    emitFaceC([a[0],a[1],a[2], b[0],b[1],b[2], q[0],q[1],q[2]], col, dd, c[0], c[1], c[2]);
+  }
+}
+function meshPrismB(B, o, ox, oy, oz, r, half, segs, axis, col, capCol, dd, taper) {
+  var i, tp = taper === undefined ? 1 : taper, c = ptOf(B, o, ox, oy, oz);
+  for (i = 0; i < segs; i++) {
+    var a0 = (i / segs) * TAU, a1 = ((i + 1) / segs) * TAU;
+    var p0 = localAxis(axis, Math.cos(a0) * r, Math.sin(a0) * r, -half);
+    var p1 = localAxis(axis, Math.cos(a1) * r, Math.sin(a1) * r, -half);
+    var q1 = localAxis(axis, Math.cos(a1) * r * tp, Math.sin(a1) * r * tp, half);
+    var q0 = localAxis(axis, Math.cos(a0) * r * tp, Math.sin(a0) * r * tp, half);
+    var w0 = ptOf(B, o, ox+p0[0], oy+p0[1], oz+p0[2]), w1 = ptOf(B, o, ox+p1[0], oy+p1[1], oz+p1[2]);
+    var v1 = ptOf(B, o, ox+q1[0], oy+q1[1], oz+q1[2]), v0 = ptOf(B, o, ox+q0[0], oy+q0[1], oz+q0[2]);
+    emitFaceC([w0[0],w0[1],w0[2], w1[0],w1[1],w1[2], v1[0],v1[1],v1[2], v0[0],v0[1],v0[2]],
+              col, dd, c[0], c[1], c[2]);
+  }
+  if (capCol) for (var e = -1; e <= 1; e += 2) {
+    var cap = [];
+    for (i = 0; i < segs; i++) {
+      var a = (i / segs) * TAU, rr = e > 0 ? r * tp : r;
+      var pp = localAxis(axis, Math.cos(a) * rr, Math.sin(a) * rr, e * half);
+      var wp = ptOf(B, o, ox + pp[0], oy + pp[1], oz + pp[2]);
+      cap.push(wp[0], wp[1], wp[2]);
+    }
+    emitFaceC(cap, capCol, dd, c[0], c[1], c[2]);
+  }
+}
+function meshConeB(B, o, ox, oy, oz, r, len, segs, axis, col, dd) {
+  var c = ptOf(B, o, ox, oy, oz), i;
+  var tipL = localAxis(axis, 0, 0, len);
+  var tip = ptOf(B, o, ox + tipL[0], oy + tipL[1], oz + tipL[2]);
+  for (i = 0; i < segs; i++) {
+    var a0 = (i / segs) * TAU, a1 = ((i + 1) / segs) * TAU;
+    var p0 = localAxis(axis, Math.cos(a0) * r, Math.sin(a0) * r, 0);
+    var p1 = localAxis(axis, Math.cos(a1) * r, Math.sin(a1) * r, 0);
+    var w0 = ptOf(B, o, ox+p0[0], oy+p0[1], oz+p0[2]), w1 = ptOf(B, o, ox+p1[0], oy+p1[1], oz+p1[2]);
+    emitFaceC([w0[0],w0[1],w0[2], w1[0],w1[1],w1[2], tip[0],tip[1],tip[2]], col, dd, c[0], c[1], c[2]);
+  }
+}
 /* ── bodies: everyone in this valley walks upright, wears a shirt, and has
       a head slightly too big for them ─────────────────────────────────────── */
 var CLOTHES = [[198,92,74],[86,124,158],[214,164,72],[110,146,92],[176,110,150],
                [226,196,140],[132,116,168],[220,138,90],[96,150,140]];
-function drawVillager(B, o, s, Q, walk, lod) {
+function drawVillager(B, o, s, Q, walk, detail, dd) {
   var fur = Q.body, skin = Q.head || Q.body, cloth = Q.cloth || CLOTHES[0];
   var legH = 0.26 * s, torH = 0.34 * s, hd = 0.46 * s;
   var hw = (Q.wide ? 0.175 : 0.150) * s;
   var sw = Math.sin(walk) * 0.30, i;
-  var hy = legH + torH + hd * 0.44;                      /* head centre */
+  var hy = legH + torH + hd * 0.26;                      /* head centre */
+  var sd = Q.seed || 11;
+  var round = detail >= 2;                               /* full mesh up close */
+  var mid = detail >= 1;
 
-  if (!lod) for (i = -1; i <= 1; i += 2) {               /* legs and feet */
+  if (mid) for (i = -1; i <= 1; i += 2) {                /* legs and feet */
     var sg = i > 0 ? sw : -sw;
-    drawBox(B, o, i * hw * 0.66, legH * 0.54, sg * legH * 0.55,
-            0.040 * s, legH * 0.54, 0.042 * s, Q.legCol || fur);
+    if (round)
+      meshPrismB(B, o, i * hw * 0.66, legH * 0.54, sg * legH * 0.55, 0.058 * s, legH * 0.54, 6, 'y',
+                 Q.legCol || fur, null, dd);
+    else
+      drawBox(B, o, i * hw * 0.66, legH * 0.54, sg * legH * 0.55,
+              0.040 * s, legH * 0.54, 0.042 * s, Q.legCol || fur);
     drawBox(B, o, i * hw * 0.66, 0.034 * s, sg * legH * 0.55 + 0.042 * s,
             0.052 * s, 0.034 * s, 0.082 * s, Q.footCol || Q.legCol || fur);
   }
-  drawBox(B, o, 0, legH + torH * 0.5, 0, hw, torH * 0.5, hw * 0.72, cloth);        /* shirt */
-  drawBox(B, o, 0, legH + torH * 0.92, 0, hw * 0.74, 0.035 * s, hw * 0.62, fur);   /* collar */
-  if (!lod) {
+  /* torso */
+  if (round) {
+    meshBlobB(B, o, 0, legH + torH * 0.58, 0, hw * 1.38, torH * 0.74, hw * 1.02, sd * 3 + 1, cloth, dd, 0, 0.10);
+    meshPrismB(B, o, 0, legH + torH * 1.10, 0, hw * 0.92, 0.06 * s, 7, 'y', fur, fur, dd);
+  } else {
+    drawBox(B, o, 0, legH + torH * 0.5, 0, hw, torH * 0.5, hw * 0.72, cloth);
+    drawBox(B, o, 0, legH + torH * 0.92, 0, hw * 0.74, 0.035 * s, hw * 0.62, fur);
+  }
+  if (mid) {
     if (Q.bib) drawBox(B, o, 0, legH + torH * 0.55, hw * 0.73, hw * 0.42, torH * 0.3, 0.02 * s, Q.bib);
-    for (i = -1; i <= 1; i += 2)                                                    /* arms */
-      drawBox(B, o, i * (hw + 0.052 * s), legH + torH * 0.60, -(i > 0 ? sw : -sw) * legH * 0.42,
-              0.050 * s, torH * 0.46, 0.054 * s, fur);
+    for (i = -1; i <= 1; i += 2) {                                                  /* arms */
+      var az = -(i > 0 ? sw : -sw) * legH * 0.42;
+      if (round)
+        meshPrismB(B, o, i * (hw + 0.070 * s), legH + torH * 0.58, az, 0.062 * s, torH * 0.44, 6, 'y',
+                   fur, fur, dd, 0.85);
+      else
+        drawBox(B, o, i * (hw + 0.052 * s), legH + torH * 0.60, az, 0.050 * s, torH * 0.46, 0.054 * s, fur);
+    }
   }
   /* head */
-  drawBox(B, o, 0, hy, 0, hd * 0.42, hd * 0.42, hd * 0.40, skin);
-  if (!lod) {
-    drawBox(B, o, hd * 0.21, hy + hd * 0.11, hd * 0.40, hd * 0.105, hd * 0.135, 0.012 * s, [38,30,26]);
-    drawBox(B, o, -hd * 0.21, hy + hd * 0.11, hd * 0.40, hd * 0.105, hd * 0.135, 0.012 * s, [38,30,26]);
-    drawBox(B, o, hd * 0.24, hy + hd * 0.17, hd * 0.41, hd * 0.035, hd * 0.045, 0.010 * s, [250,248,244]);
-    drawBox(B, o, -hd * 0.18, hy + hd * 0.17, hd * 0.41, hd * 0.035, hd * 0.045, 0.010 * s, [250,248,244]);
+  if (round) meshBlobB(B, o, 0, hy, 0, hd * 0.50, hd * 0.48, hd * 0.47, sd * 7 + 3, skin, dd, 0, 0.09);
+  else drawBox(B, o, 0, hy, 0, hd * 0.42, hd * 0.42, hd * 0.40, skin);
+  if (mid) {
+    drawBox(B, o, hd * 0.20, hy + hd * 0.10, hd * 0.33, hd * 0.100, hd * 0.130, hd * 0.05, [38,30,26]);
+    drawBox(B, o, -hd * 0.20, hy + hd * 0.10, hd * 0.33, hd * 0.100, hd * 0.130, hd * 0.05, [38,30,26]);
+    drawBox(B, o, hd * 0.23, hy + hd * 0.16, hd * 0.37, hd * 0.033, hd * 0.042, hd * 0.02, [250,248,244]);
+    drawBox(B, o, -hd * 0.17, hy + hd * 0.16, hd * 0.37, hd * 0.033, hd * 0.042, hd * 0.02, [250,248,244]);
   }
   /* muzzle or beak */
   if (Q.feat === 'bird') {
-    var bl2 = (Q.pouch ? 0.44 : 0.26) * hd;
-    drawBox(B, o, 0, hy - hd * 0.04, hd * 0.40 + bl2 * 0.5, hd * 0.13, hd * 0.10, bl2 * 0.5, Q.beak);
-    if (Q.pouch) drawBox(B, o, 0, hy - hd * 0.22, hd * 0.40 + bl2 * 0.45, hd * 0.16, hd * 0.14, bl2 * 0.42, Q.pouchCol);
+    var bl2 = (Q.pouch ? 0.44 : 0.30) * hd;
+    if (round) meshConeB(B, o, 0, hy - hd * 0.04, hd * 0.30, hd * 0.14, bl2 * 1.6, 6, 'z', Q.beak, dd);
+    else drawBox(B, o, 0, hy - hd * 0.04, hd * 0.40 + bl2 * 0.5, hd * 0.13, hd * 0.10, bl2 * 0.5, Q.beak);
+    if (Q.pouch) {
+      if (round) meshBlobB(B, o, 0, hy - hd * 0.24, hd * 0.52, hd * 0.17, hd * 0.15, bl2 * 0.9,
+                           sd + 5, Q.pouchCol, dd, 1.2);
+      else drawBox(B, o, 0, hy - hd * 0.22, hd * 0.40 + bl2 * 0.45, hd * 0.16, hd * 0.14, bl2 * 0.42, Q.pouchCol);
+    }
     if (Q.comb) drawBox(B, o, 0, hy + hd * 0.50, hd * 0.06, hd * 0.05, hd * 0.16, hd * 0.20, [198,66,54]);
   } else if (Q.feat === 'human') {
     drawBox(B, o, 0, hy - hd * 0.02, hd * 0.42, hd * 0.06, hd * 0.07, hd * 0.05, Q.head);
     if (Q.cap) {
-      drawBox(B, o, 0, hy + hd * 0.44, 0, hd * 0.44, hd * 0.12, hd * 0.42, Q.cap);
-      drawBox(B, o, 0, hy + hd * 0.34, hd * 0.30, hd * 0.40, hd * 0.06, hd * 0.16, Q.cap);
+      if (round) meshBlobB(B, o, 0, hy + hd * 0.30, 0, hd * 0.46, hd * 0.30, hd * 0.44, sd * 5, Q.cap, dd, 0.25);
+      else drawBox(B, o, 0, hy + hd * 0.44, 0, hd * 0.44, hd * 0.12, hd * 0.42, Q.cap);
+      drawBox(B, o, 0, hy + hd * 0.30, hd * 0.34, hd * 0.38, hd * 0.05, hd * 0.14, Q.cap);
     }
   } else if (Q.feat !== 'shell') {
     var ml = Q.muzzle || 0.22;
-    drawBox(B, o, 0, hy - hd * 0.10, hd * 0.40 + ml * hd * 0.5, hd * 0.20, hd * 0.15, ml * hd * 0.5,
-            Q.snout || skin);
-    drawBox(B, o, 0, hy - hd * 0.10, hd * 0.42 + ml * hd, hd * 0.07, hd * 0.06, 0.012 * s, [50,40,36]);
+    if (round) meshBlobB(B, o, 0, hy - hd * 0.10, hd * 0.30 + ml * hd * 0.4, hd * 0.20, hd * 0.15,
+                         ml * hd * 0.66, sd * 11 + 2, Q.snout || skin, dd, 0, 0.12);
+    else drawBox(B, o, 0, hy - hd * 0.10, hd * 0.40 + ml * hd * 0.5, hd * 0.20, hd * 0.15,
+                 ml * hd * 0.5, Q.snout || skin);
+    drawBox(B, o, 0, hy - hd * 0.10, hd * 0.34 + ml * hd, hd * 0.07, hd * 0.06, hd * 0.04, [50,40,36]);
     if (Q.beard) drawBox(B, o, 0, hy - hd * 0.40, hd * 0.34, hd * 0.10, hd * 0.20, hd * 0.10, Q.beard);
   }
   /* ears, horns, wool */
-  if (Q.ear === 'long') for (i = -1; i <= 1; i += 2)
-    drawBox(B, o, i * hd * 0.34, hy + hd * 0.62, -hd * 0.04, hd * 0.10, hd * 0.34, hd * 0.09, skin);
-  else if (Q.ear === 'point') for (i = -1; i <= 1; i += 2) {
-    drawBox(B, o, i * hd * 0.30, hy + hd * 0.52, 0, hd * 0.13, hd * 0.22, hd * 0.07, skin);
-    if (!lod) drawBox(B, o, i * hd * 0.30, hy + hd * 0.48, hd * 0.04, hd * 0.07, hd * 0.12, 0.012 * s, Q.inner || [226,170,160]);
+  if (Q.ear === 'long') for (i = -1; i <= 1; i += 2) {
+    if (round) meshPrismB(B, o, i * hd * 0.34, hy + hd * 0.62, -hd * 0.04, hd * 0.09, hd * 0.34, 5, 'y',
+                          skin, skin, dd, 0.55);
+    else drawBox(B, o, i * hd * 0.34, hy + hd * 0.62, -hd * 0.04, hd * 0.10, hd * 0.34, hd * 0.09, skin);
+  } else if (Q.ear === 'point') for (i = -1; i <= 1; i += 2) {
+    if (round) meshConeB(B, o, i * hd * 0.30, hy + hd * 0.30, 0, hd * 0.13, hd * 0.44, 5, 'y', skin, dd);
+    else drawBox(B, o, i * hd * 0.30, hy + hd * 0.52, 0, hd * 0.13, hd * 0.22, hd * 0.07, skin);
+    if (mid && !round) drawBox(B, o, i * hd * 0.30, hy + hd * 0.48, hd * 0.04, hd * 0.07, hd * 0.12,
+                               0.012 * s, Q.inner || [226,170,160]);
   } else if (Q.ear === 'horn') {
     for (i = -1; i <= 1; i += 2) {
-      drawBox(B, o, i * hd * 0.30, hy + hd * 0.52, hd * 0.02, hd * 0.08, hd * 0.20, hd * 0.09, Q.horn);
+      if (round) {
+        meshConeB(B, o, i * hd * 0.30, hy + hd * 0.32, hd * 0.02, hd * 0.09, hd * 0.46, 5, 'y', Q.horn, dd);
+        meshBlobB(B, o, i * hd * 0.48, hy + hd * 0.14, 0, hd * 0.12, hd * 0.07, hd * 0.10, sd + i, skin, dd);
+      } else {
+        drawBox(B, o, i * hd * 0.30, hy + hd * 0.52, hd * 0.02, hd * 0.08, hd * 0.20, hd * 0.09, Q.horn);
+        drawBox(B, o, i * hd * 0.48, hy + hd * 0.14, 0, hd * 0.12, hd * 0.07, hd * 0.10, skin);
+      }
       drawBox(B, o, i * hd * 0.30, hy + hd * 0.70, -hd * 0.14, hd * 0.07, hd * 0.06, hd * 0.18, Q.horn);
-      drawBox(B, o, i * hd * 0.48, hy + hd * 0.14, 0, hd * 0.12, hd * 0.07, hd * 0.10, skin);
     }
-  } else if (Q.ear === 'round') for (i = -1; i <= 1; i += 2)
-    drawBox(B, o, i * hd * 0.44, hy + hd * 0.16, 0, hd * 0.10, hd * 0.10, hd * 0.10, skin);
-  if (Q.wool) {                                            /* sheep fringe */
-    drawBox(B, o, 0, hy + hd * 0.40, -hd * 0.05, hd * 0.44, hd * 0.16, hd * 0.42, Q.wool);
-    if (!lod) drawBox(B, o, 0, legH + torH * 0.62, -hw * 0.78, hw * 0.8, torH * 0.42, 0.04 * s, Q.wool);
+  } else if (Q.ear === 'round') for (i = -1; i <= 1; i += 2) {
+    if (round) meshBlobB(B, o, i * hd * 0.44, hy + hd * 0.16, 0, hd * 0.10, hd * 0.10, hd * 0.10,
+                         sd * 2 + i, skin, dd);
+    else drawBox(B, o, i * hd * 0.44, hy + hd * 0.16, 0, hd * 0.10, hd * 0.10, hd * 0.10, skin);
+  }
+  if (Q.wool) {
+    if (round) meshBlobB(B, o, 0, hy + hd * 0.34, -hd * 0.05, hd * 0.46, hd * 0.24, hd * 0.44,
+                         sd * 13, Q.wool, dd);
+    else drawBox(B, o, 0, hy + hd * 0.40, -hd * 0.05, hd * 0.44, hd * 0.16, hd * 0.42, Q.wool);
+    if (mid) drawBox(B, o, 0, legH + torH * 0.62, -hw * 0.78, hw * 0.8, torH * 0.42, 0.04 * s, Q.wool);
   }
   /* shell, worn like a rucksack */
   if (Q.feat === 'shell') {
-    drawBox(B, o, 0, legH + torH * 0.60, -hw * 0.86, hw * 1.02, torH * 0.56, 0.09 * s, Q.shell);
-    drawBox(B, o, 0, legH + torH * 0.60, -hw * 1.02, hw * 0.72, torH * 0.36, 0.05 * s, Q.shell2 || Q.shell);
+    if (round) {
+      meshBlobB(B, o, 0, legH + torH * 0.62, -hw * 0.80, hw * 1.05, torH * 0.60, hw * 0.5,
+                sd * 17, Q.shell, dd);
+      meshBlobB(B, o, 0, legH + torH * 0.62, -hw * 1.02, hw * 0.6, torH * 0.34, hw * 0.2,
+                sd * 19, Q.shell2 || Q.shell, dd);
+    } else {
+      drawBox(B, o, 0, legH + torH * 0.60, -hw * 0.86, hw * 1.02, torH * 0.56, 0.09 * s, Q.shell);
+      drawBox(B, o, 0, legH + torH * 0.60, -hw * 1.02, hw * 0.72, torH * 0.36, 0.05 * s, Q.shell2 || Q.shell);
+    }
     drawBox(B, o, 0, hy - hd * 0.10, hd * 0.44, hd * 0.16, hd * 0.11, hd * 0.10, skin);
     drawBox(B, o, 0, legH + torH * 0.52, hw * 0.74, hw * 0.78, torH * 0.44, 0.03 * s, Q.plastron || [214,192,132]);
   }
   /* tails */
   if (Q.tail === 'bush')
-    drawBox(B, o, 0, legH + torH * 0.34, -hw * 0.95, hw * 0.42, torH * 0.34, hw * 0.42, Q.tailCol || fur);
+    round ? meshBlobB(B, o, 0, legH + torH * 0.34, -hw * 0.95, hw * 0.44, torH * 0.36, hw * 0.44,
+                      sd * 23, Q.tailCol || fur, dd)
+          : drawBox(B, o, 0, legH + torH * 0.34, -hw * 0.95, hw * 0.42, torH * 0.34, hw * 0.42, Q.tailCol || fur);
   else if (Q.tail === 'up')
     drawBox(B, o, 0, legH + torH * 0.9 + Math.sin(walk * 0.5) * 0.02 * s, -hw * 0.9,
             0.05 * s, torH * 0.5, 0.05 * s, Q.tailCol || fur);
   else if (Q.tail === 'stub')
     drawBox(B, o, 0, legH + torH * 0.4, -hw * 0.9, 0.06 * s, 0.06 * s, 0.05 * s, Q.tailCol || fur);
   /* wings folded at the sides, for the birds */
-  if (Q.feat === 'bird' && !lod) for (i = -1; i <= 1; i += 2)
+  if (Q.feat === 'bird' && mid) for (i = -1; i <= 1; i += 2)
     drawBox(B, o, i * (hw + 0.045 * s), legH + torH * 0.60, -0.01 * s,
             0.035 * s, torH * 0.44, hw * 0.62, Q.wing || fur);
 }
@@ -2235,15 +2369,16 @@ function drawCritter(c) {
   var dx = c.x - camX, dz = c.z - camZ, d = Math.sqrt(dx * dx + dz * dz);
   if (d > 230) return;
   if (d > 30 && (dx * fx + dz * fz) / d < COS_CULL) return;
-  if (d > 120 && !visible(c.x, c.y + 1.5, c.z)) return;
+  if (d > 40 && !visible(c.x, c.y + 0.8, c.z)) return;
   var sp = SPECIES[c.species], sc = sp.h * (c.scale || 1);
   var walk = c.walk || 0;
+  sp.p.seed = (c.ph * 977) | 0;
   var idle = Math.sin(gTime * 1.3 + c.ph) * 0.012;                 /* breathing */
   var yawUsed = c.yaw + Math.sin(gTime * 0.5 + c.ph) * 0.10;
   var B = basis(yawUsed, 0, 0);
   B.yaw0 = c.yaw; B.yawUsed = yawUsed;
   shadowAt(c.x, c.y, c.z, 0.34 * sc, 0.30);
-  drawVillager(B, [c.x, c.y + idle, c.z], sc, sp.p, walk, d > 75);
+  drawVillager(B, [c.x, c.y + idle, c.z], sc, sp.p, walk, d < 42 ? 2 : (d < 110 ? 1 : 0), d);
   if (c.name && (c.quest ? d < 40 : c === nearestNamed) && d < 46) {   /* who is that? */
     var yTop = c.y + 1.28 * sc;
     if (project(c.x, yTop, c.z)) {
@@ -3143,6 +3278,7 @@ function init() {
   buildRoads();
   buildVillages();
   buildSkyStuff();
+  buildHeightGrid();
   buildCritters();
   spawnWanderers();
   var h = loc('home');
@@ -3161,6 +3297,12 @@ function settingsSheet() {
     opts.push({ t: qNames[n], right: qUser === n ? 'on' : '', dis: qUser === n,
       fn: function () { qUser = n; qAdapt = 1; resize(); settingsSheet(); } });
   })(i);
+  opts.push({ rule: true });
+  opts.push({ t: 'Flight stick: ' + (invertFly ? 'inverted' : 'direct'),
+    right: invertFly ? 'pull back to climb' : 'press up to climb',
+    d: invertFly ? 'Nose follows the stick, as in a real aircraft: <b>&#8595;</b> climbs, <b>&#8593;</b> dives.'
+                 : 'Straightforward: <b>&#8593;</b> climbs, <b>&#8595;</b> dives.',
+    fn: function () { invertFly = !invertFly; settingsSheet(); } });
   opts.push({ rule: true });
   opts.push({ t: 'On the road', dis: true,
     d: '<b>W</b> throttle · <b>S</b> brake and reverse · <b>A</b>/<b>D</b> steer · '
