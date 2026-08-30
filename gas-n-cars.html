@@ -538,8 +538,8 @@ function sprite(x,y,z,fn,bias){
 /* ═══════════════════════════════════════════════════════════════════════════
    3. THE STATION — a slab of concrete in a very large desert
    ═══════════════════════════════════════════════════════════════════════════ */
-var C_SAND=[232,196,132], C_SAND2=[212,170,110], C_ROAD=[82,82,90], C_LOT=[196,188,174],
-    C_CONC=[196,192,184], C_STEEL=[92,104,120], C_BLUE=[64,116,190], C_ORANGE=[240,150,52],
+var C_SAND=[186,158,107], C_SAND2=[170,137,89], C_ROAD=[74,74,81], C_LOT=[158,151,140],
+    C_CONC=[172,169,162], C_STEEL=[92,104,120], C_BLUE=[64,116,190], C_ORANGE=[240,150,52],
     C_WHITE=[248,248,244], C_DARK=[46,58,70], C_GLASS=[168,214,232], C_CACTUS=[86,146,92];
 
 /* pump islands sit along z, cars pull in facing -x */
@@ -700,7 +700,7 @@ function drawGround(){
   }
   /* highway */
   groundQuad(0, -30, 60, 5.0, 0, C_ROAD, 1, 0.014);
-  for(var d=-52;d<52;d+=6) groundQuad(d, -30, 1.5, 0.16, 0, [236,224,150], 1, 0.02);
+  for(var d=-52;d<52;d+=6) groundQuad(d, -30, 1.5, 0.16, 0, [194,184,124], 1, 0.02);
   /* forecourt slab + apron */
   groundQuad((LOT.x0+LOT.x1)/2, (LOT.z0+LOT.z1)/2, (LOT.x1-LOT.x0)/2, (LOT.z1-LOT.z0)/2, 0, C_LOT, 1, 0.016);
   groundQuad(0, -20, 9, 5, 0, C_LOT, 1, 0.015);
@@ -2007,20 +2007,20 @@ function stnGroundDetail(){
   /* driveway joining the forecourt to the highway, and a kerb band that
      stops the concrete slab from dissolving into the sand */
   groundQuad(-3.0,-17.6, 5.4, 7.6, 0, C_LOT, 1, 0.0161);
-  groundQuad(0, LOT.z0, 11.2, 0.24, 0, [138,134,130], 1, 0.0163);
-  groundQuad(0, LOT.z1, 11.2, 0.24, 0, [138,134,130], 1, 0.0163);
-  groundQuad(LOT.x0, -1, 0.24, 10.0, 0, [138,134,130], 1, 0.0163);
-  groundQuad(LOT.x1, -1, 0.24, 10.0, 0, [138,134,130], 1, 0.0163);
+  groundQuad(0, LOT.z0, 11.2, 0.24, 0, [112,109,106], 1, 0.0163);
+  groundQuad(0, LOT.z1, 11.2, 0.24, 0, [112,109,106], 1, 0.0163);
+  groundQuad(LOT.x0, -1, 0.24, 10.0, 0, [112,109,106], 1, 0.0163);
+  groundQuad(LOT.x1, -1, 0.24, 10.0, 0, [112,109,106], 1, 0.0163);
   /* painted forecourt apron under the pump islands */
-  groundQuad(-0.1,-4.0, 5.9, 2.8, 0, [198,194,186], 1, 0.017);
-  groundQuad(-0.1,-6.75, 5.9, 0.05, 0, [246,244,236], 1, 0.018);
-  groundQuad(-0.1,-1.25, 5.9, 0.05, 0, [246,244,236], 1, 0.018);
+  groundQuad(-0.1,-4.0, 5.9, 2.8, 0, [160,157,150], 1, 0.017);
+  groundQuad(-0.1,-6.75, 5.9, 0.05, 0, [206,204,196], 1, 0.018);
+  groundQuad(-0.1,-1.25, 5.9, 0.05, 0, [206,204,196], 1, 0.018);
   /* bay outlines by each pump */
   for(i=0;i<PUMPS.length;i++){
     var P=PUMPS[i];
-    groundQuad(P.carX, P.carZ-1.45, 2.6, 0.05, 0, [244,212,88], 1, 0.019);
-    groundQuad(P.carX, P.carZ+1.45, 2.6, 0.05, 0, [244,212,88], 1, 0.019);
-    groundQuad(P.carX, P.carZ,      2.6, 0.04, 0, [244,212,88], 1, 0.019);
+    groundQuad(P.carX, P.carZ-1.45, 2.6, 0.05, 0, [200,174,72], 1, 0.019);
+    groundQuad(P.carX, P.carZ+1.45, 2.6, 0.05, 0, [200,174,72], 1, 0.019);
+    groundQuad(P.carX, P.carZ,      2.6, 0.04, 0, [200,174,72], 1, 0.019);
   }
   /* skid marks off the highway and through the lanes */
   groundQuad( 0.10,-13.6, 0.12, 4.2, 0, [56,52,52], 0.30, 0.020);
