@@ -459,6 +459,62 @@ function groundQuad(x,z,w,d,yaw,col,alpha,y){
             p[2][0],p[2][1],p[2][2], p[3][0],p[3][1],p[3][2]],
            lit(col,0,1,0), { alpha:alpha, seam:false });
 }
+/* ── contact shadows ──────────────────────────────────────────────────────
+   Drawn in the ground layer so an object can never be painted over by its own
+   shadow. Two concentric ellipses give a soft, cartoon-legible falloff.      */
+function shadowEllipse(x,z,rx,rz,yaw,alpha){
+  var d=dist2(x,z,camX,camZ); if(d>70) return;
+  var a=(alpha===undefined?1:alpha)*clamp((70-d)/16,0,1);
+  if(a<0.02) return;
+  var cs=Math.cos(yaw), sn=Math.sin(yaw), segs=10;
+  for(var k=0;k<2;k++){
+    var q=k?0.56:1.0, v=[];
+    for(var i=0;i<segs;i++){
+      var t=i/segs*TAU, ox=Math.cos(t)*rx*q, oz=Math.sin(t)*rz*q;
+      v.push(x+ox*cs+oz*sn, 0.028+k*0.002, z-ox*sn+oz*cs);
+    }
+    emitPoly(v, [40,36,44], { alpha:a*0.26, seam:false, depth:d-0.4-k*0.02 });
+  }
+}
+function shadowRect(x,z,w,d2,yaw,alpha){
+  var d=dist2(x,z,camX,camZ); if(d>90) return;
+  var a=alpha*clamp((90-d)/18,0,1); if(a<0.02) return;
+  var B=basis(yaw,0,0), o=[x,0.026,z];
+  var p=[ptOf(B,o,-w,0,-d2), ptOf(B,o,w,0,-d2), ptOf(B,o,w,0,d2), ptOf(B,o,-w,0,d2)];
+  emitPoly([p[0][0],p[0][1],p[0][2], p[1][0],p[1][1],p[1][2],
+            p[2][0],p[2][1],p[2][2], p[3][0],p[3][1],p[3][2]],
+           [40,36,44], { alpha:a, seam:false, depth:d-0.35 });
+}
+/* the sun comes from (LX,LY,LZ), so a shadow is offset by -L.xz * height/L.y */
+var SHOFF = 0.42;
+function drawShadows(){
+  var i;
+  /* canopy: the big one that makes the forecourt feel roofed */
+  shadowRect(-3.2+SHOFF*-2.6, -1.2+SHOFF*-2.6, 5.2, 7.6, 0, 0.16);
+  /* station block */
+  shadowRect(SHOP.x+SHOFF*-1.8, SHOP.z+SHOFF*-1.8, SHOP.w/2+0.2, SHOP.d/2+0.2, 0, 0.20);
+  /* pump islands */
+  for(i=0;i<PUMPS.length;i++) shadowEllipse(PUMPS[i].x+0.35, PUMPS[i].z+0.35, 1.5, 2.4, 0, 0.55);
+  /* cars */
+  for(i=0;i<CARS.length;i++){
+    var c=CARS[i];
+    shadowEllipse(c.x+0.32, c.z+0.32, 1.25, 2.35, c.yaw, 1);
+  }
+  /* the delivery truck, when it is in */
+  if(typeof truck!=='undefined' && truck && truck.here)
+    shadowEllipse(truck.x+0.4, truck.z+0.4, 1.7, 3.4, truck.yaw||0, 0.9);
+  /* cacti and rocks close enough to matter */
+  for(i=0;i<CACTI.length;i++){
+    var q=CACTI[i];
+    if(dist2(q.x,q.z,camX,camZ)>46) continue;
+    shadowEllipse(q.x+q.h*SHOFF*0.5, q.z+q.h*SHOFF*0.5, 0.45, 0.45, 0, 0.8);
+  }
+  for(i=0;i<ROCKS.length;i++){
+    var r=ROCKS[i];
+    if(dist2(r.x,r.z,camX,camZ)>34) continue;
+    shadowEllipse(r.x+r.s*0.4, r.z+r.s*0.4, r.s*0.8, r.s*0.7, 0, 0.7);
+  }
+}
 function sprite(x,y,z,fn,bias){
   if(!project(x,y,z)) return;
   var sx=_px, sy=_py, sc=_ps, d=_pd;
@@ -534,6 +590,49 @@ function drawSky(){
     ctx.lineTo(sx+wpx, base);
     ctx.closePath(); ctx.fill();
   }
+}
+/* ── cartoon clouds ───────────────────────────────────────────────────────
+   Painted straight onto the sky, before any geometry. Each cloud is a cluster
+   of overlapping circles with a flat bottom, so it reads as a drawn shape
+   rather than a soft airbrush.                                             */
+var CLOUDS=[];
+(function(){
+  var rn=rngFrom(77113);
+  for(var i=0;i<34;i++){
+    var a=rn()*TAU, r=175+rn()*270;
+    var puffs=[], n=3+(rn()*3|0);
+    for(var j=0;j<n;j++)
+      puffs.push([ (j-(n-1)/2)*(0.52+rn()*0.22), (rn()-0.35)*0.24, 0.34+rn()*0.30 ]);
+    CLOUDS.push({ x:Math.cos(a)*r, z:Math.sin(a)*r, y:38+rn()*54,
+                  s:13+rn()*17, drift:rn()*TAU, puffs:puffs });
+  }
+})();
+function drawClouds(){
+  ctx.save();
+  for(var i=0;i<CLOUDS.length;i++){
+    var c=CLOUDS[i];
+    var cx=c.x+Math.sin(gTime*0.006+c.drift)*8;
+    if(!project(cx, c.y, c.z)) continue;
+    var sx=_px, sy=_py, sc=_ps*c.s;
+    if(sx+sc*1.6<0 || sx-sc*1.6>W || sy-sc>H) continue;
+    var p, k;
+    /* soft under-shade first, then the bright body on top */
+    for(k=0;k<2;k++){
+      ctx.fillStyle = k ? 'rgba(255,255,255,0.97)' : 'rgba(206,224,238,0.9)';
+      var dy = k ? 0 : sc*0.14;
+      ctx.beginPath();
+      for(var j=0;j<c.puffs.length;j++){
+        p=c.puffs[j];
+        ctx.moveTo(sx+p[0]*sc+p[2]*sc, sy+p[1]*sc+dy);
+        ctx.arc(sx+p[0]*sc, sy+p[1]*sc+dy, p[2]*sc, 0, TAU);
+      }
+      /* flat base slab ties the puffs together */
+      var w=(c.puffs.length*0.52+0.34)*sc;
+      ctx.rect(sx-w*0.5, sy+p[1]*sc+dy, w, sc*0.20);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
 }
 /* the desert floor: one big quad, then the lot and road painted on top */
 function drawGround(){
@@ -1508,8 +1607,11 @@ function roundRect(g,x,y,w,h,r){
 function render(){
   setCamBasis();
   drawSky();
+  drawClouds();
   DLn=0;
   drawGround();
+  drawShadows();
+  flush();                       /* ground layer: floor, decals, shadows */
   drawStation();
   drawTruck();
   for(var i=0;i<CARS.length;i++) drawCar(CARS[i]);
