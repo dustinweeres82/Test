@@ -1894,146 +1894,138 @@ function ptOf(B, o, x, y, z) {
           o[2] + B.r[2]*x + B.u[2]*y + B.f[2]*z];
 }
 
-/* ── bodies: one quadruped builder, one bird builder, one tortoise ───────── */
-function drawQuad(B, o, s, Q) {
-  var bw = Q.bw * s, bh = Q.bh * s, bl = Q.bl * s, lg = Q.leg * s, nk = Q.neck * s;
-  var head = Q.head || Q.body, i;
-  for (i = 0; i < 4; i++) {
-    var lx = (i % 2 ? 1 : -1) * bw * 0.62, lz = (i < 2 ? 1 : -1) * bl * 0.58;
-    drawBox(B, o, lx, lg * 0.5, lz, bw * 0.15, lg * 0.5, bw * 0.15, Q.legCol || head);
+/* ── bodies: everyone in this valley walks upright, wears a shirt, and has
+      a head slightly too big for them ─────────────────────────────────────── */
+var CLOTHES = [[198,92,74],[86,124,158],[214,164,72],[110,146,92],[176,110,150],
+               [226,196,140],[132,116,168],[220,138,90],[96,150,140]];
+function drawVillager(B, o, s, Q, walk, lod) {
+  var fur = Q.body, skin = Q.head || Q.body, cloth = Q.cloth || CLOTHES[0];
+  var legH = 0.26 * s, torH = 0.34 * s, hd = 0.46 * s;
+  var hw = (Q.wide ? 0.175 : 0.150) * s;
+  var sw = Math.sin(walk) * 0.30, i;
+  var hy = legH + torH + hd * 0.44;                      /* head centre */
+
+  if (!lod) for (i = -1; i <= 1; i += 2) {               /* legs and feet */
+    var sg = i > 0 ? sw : -sw;
+    drawBox(B, o, i * hw * 0.66, legH * 0.54, sg * legH * 0.55,
+            0.040 * s, legH * 0.54, 0.042 * s, Q.legCol || fur);
+    drawBox(B, o, i * hw * 0.66, 0.034 * s, sg * legH * 0.55 + 0.042 * s,
+            0.052 * s, 0.034 * s, 0.082 * s, Q.footCol || Q.legCol || fur);
   }
-  drawBox(B, o, 0, lg + bh, 0, bw, bh, bl, Q.body);
-  if (Q.belly) drawBox(B, o, 0, lg + bh * 0.62, bl * 0.12, bw * 0.84, bh * 0.44, bl * 0.78, Q.belly);
-  drawBox(B, o, 0, lg + bh * 1.4 + nk * 0.5, bl * 0.66, bw * 0.40, bh * 0.5 + nk * 0.5, bw * 0.40, Q.body);
-  var hy = lg + bh * 1.9 + nk;
-  drawBox(B, o, 0, hy, bl * 0.86, bw * 0.46, bh * 0.58, bw * 0.5, head);
-  drawBox(B, o, 0, hy - bh * 0.22, bl * 0.86 + bw * 0.46, bw * 0.24, bh * 0.3, bw * 0.3, Q.snout || head);
-  drawBox(B, o, bw * 0.22, hy + bh * 0.12, bl * 0.86 + bw * 0.3, bw * 0.07, bh * 0.09, 0.02 * s, [40,34,30]);
-  drawBox(B, o, -bw * 0.22, hy + bh * 0.12, bl * 0.86 + bw * 0.3, bw * 0.07, bh * 0.09, 0.02 * s, [40,34,30]);
-  for (i = -1; i <= 1; i += 2) {                                     /* ears or horns */
-    if (Q.ear === 'long')
-      drawBox(B, o, i * bw * 0.30, hy + bh * 0.72, bl * 0.74, bw * 0.13, bh * 0.46, bw * 0.10, head);
-    else if (Q.ear === 'horn') {
-      drawBox(B, o, i * bw * 0.34, hy + bh * 0.66, bl * 0.78, bw * 0.11, bh * 0.42, bw * 0.13, Q.horn || [212,196,164]);
-      drawBox(B, o, i * bw * 0.34, hy + bh * 1.02, bl * 0.62, bw * 0.10, bh * 0.16, bw * 0.22, Q.horn || [212,196,164]);
-      drawBox(B, o, i * bw * 0.52, hy + bh * 0.30, bl * 0.80, bw * 0.16, bh * 0.12, bw * 0.09, head);
+  drawBox(B, o, 0, legH + torH * 0.5, 0, hw, torH * 0.5, hw * 0.72, cloth);        /* shirt */
+  drawBox(B, o, 0, legH + torH * 0.92, 0, hw * 0.74, 0.035 * s, hw * 0.62, fur);   /* collar */
+  if (!lod) {
+    if (Q.bib) drawBox(B, o, 0, legH + torH * 0.55, hw * 0.73, hw * 0.42, torH * 0.3, 0.02 * s, Q.bib);
+    for (i = -1; i <= 1; i += 2)                                                    /* arms */
+      drawBox(B, o, i * (hw + 0.052 * s), legH + torH * 0.60, -(i > 0 ? sw : -sw) * legH * 0.42,
+              0.050 * s, torH * 0.46, 0.054 * s, fur);
+  }
+  /* head */
+  drawBox(B, o, 0, hy, 0, hd * 0.42, hd * 0.42, hd * 0.40, skin);
+  if (!lod) {
+    drawBox(B, o, hd * 0.21, hy + hd * 0.11, hd * 0.40, hd * 0.105, hd * 0.135, 0.012 * s, [38,30,26]);
+    drawBox(B, o, -hd * 0.21, hy + hd * 0.11, hd * 0.40, hd * 0.105, hd * 0.135, 0.012 * s, [38,30,26]);
+    drawBox(B, o, hd * 0.24, hy + hd * 0.17, hd * 0.41, hd * 0.035, hd * 0.045, 0.010 * s, [250,248,244]);
+    drawBox(B, o, -hd * 0.18, hy + hd * 0.17, hd * 0.41, hd * 0.035, hd * 0.045, 0.010 * s, [250,248,244]);
+  }
+  /* muzzle or beak */
+  if (Q.feat === 'bird') {
+    var bl2 = (Q.pouch ? 0.44 : 0.26) * hd;
+    drawBox(B, o, 0, hy - hd * 0.04, hd * 0.40 + bl2 * 0.5, hd * 0.13, hd * 0.10, bl2 * 0.5, Q.beak);
+    if (Q.pouch) drawBox(B, o, 0, hy - hd * 0.22, hd * 0.40 + bl2 * 0.45, hd * 0.16, hd * 0.14, bl2 * 0.42, Q.pouchCol);
+    if (Q.comb) drawBox(B, o, 0, hy + hd * 0.50, hd * 0.06, hd * 0.05, hd * 0.16, hd * 0.20, [198,66,54]);
+  } else if (Q.feat !== 'shell') {
+    var ml = Q.muzzle || 0.22;
+    drawBox(B, o, 0, hy - hd * 0.10, hd * 0.40 + ml * hd * 0.5, hd * 0.20, hd * 0.15, ml * hd * 0.5,
+            Q.snout || skin);
+    drawBox(B, o, 0, hy - hd * 0.10, hd * 0.42 + ml * hd, hd * 0.07, hd * 0.06, 0.012 * s, [50,40,36]);
+    if (Q.beard) drawBox(B, o, 0, hy - hd * 0.40, hd * 0.34, hd * 0.10, hd * 0.20, hd * 0.10, Q.beard);
+  }
+  /* ears, horns, wool */
+  if (Q.ear === 'long') for (i = -1; i <= 1; i += 2)
+    drawBox(B, o, i * hd * 0.34, hy + hd * 0.62, -hd * 0.04, hd * 0.10, hd * 0.34, hd * 0.09, skin);
+  else if (Q.ear === 'point') for (i = -1; i <= 1; i += 2) {
+    drawBox(B, o, i * hd * 0.30, hy + hd * 0.52, 0, hd * 0.13, hd * 0.22, hd * 0.07, skin);
+    if (!lod) drawBox(B, o, i * hd * 0.30, hy + hd * 0.48, hd * 0.04, hd * 0.07, hd * 0.12, 0.012 * s, Q.inner || [226,170,160]);
+  } else if (Q.ear === 'horn') {
+    for (i = -1; i <= 1; i += 2) {
+      drawBox(B, o, i * hd * 0.30, hy + hd * 0.52, hd * 0.02, hd * 0.08, hd * 0.20, hd * 0.09, Q.horn);
+      drawBox(B, o, i * hd * 0.30, hy + hd * 0.70, -hd * 0.14, hd * 0.07, hd * 0.06, hd * 0.18, Q.horn);
+      drawBox(B, o, i * hd * 0.48, hy + hd * 0.14, 0, hd * 0.12, hd * 0.07, hd * 0.10, skin);
     }
-    else if (Q.ear === 'point')
-      drawBox(B, o, i * bw * 0.36, hy + bh * 0.72, bl * 0.80, bw * 0.16, bh * 0.42, bw * 0.08, head);
-    else
-      drawBox(B, o, i * bw * 0.42, hy + bh * 0.42, bl * 0.80, bw * 0.14, bh * 0.26, bw * 0.09, head);
+  } else if (Q.ear === 'round') for (i = -1; i <= 1; i += 2)
+    drawBox(B, o, i * hd * 0.44, hy + hd * 0.16, 0, hd * 0.10, hd * 0.10, hd * 0.10, skin);
+  if (Q.wool) {                                            /* sheep fringe */
+    drawBox(B, o, 0, hy + hd * 0.40, -hd * 0.05, hd * 0.44, hd * 0.16, hd * 0.42, Q.wool);
+    if (!lod) drawBox(B, o, 0, legH + torH * 0.62, -hw * 0.78, hw * 0.8, torH * 0.42, 0.04 * s, Q.wool);
   }
-  if (Q.beard) drawBox(B, o, 0, hy - bh * 0.75, bl * 0.9, bw * 0.14, bh * 0.42, bw * 0.14, Q.beard);
-  var tw = Math.sin(gTime * 3.1 + (o[0] + o[2])) * 0.28;
-  var Bt = basis(B.yaw0 + tw, 0, 0);
+  /* shell, worn like a rucksack */
+  if (Q.feat === 'shell') {
+    drawBox(B, o, 0, legH + torH * 0.60, -hw * 0.86, hw * 1.02, torH * 0.56, 0.09 * s, Q.shell);
+    drawBox(B, o, 0, legH + torH * 0.60, -hw * 1.02, hw * 0.72, torH * 0.36, 0.05 * s, Q.shell2 || Q.shell);
+    drawBox(B, o, 0, hy - hd * 0.10, hd * 0.44, hd * 0.16, hd * 0.11, hd * 0.10, skin);
+    drawBox(B, o, 0, legH + torH * 0.52, hw * 0.74, hw * 0.78, torH * 0.44, 0.03 * s, Q.plastron || [214,192,132]);
+  }
+  /* tails */
   if (Q.tail === 'bush')
-    drawBox(B, o, tw * bw * 0.5, lg + bh * 1.5, -bl * 1.05, bw * 0.34, bh * 0.42, bl * 0.34, Q.tailCol || head);
-  else if (Q.tail === 'thin')
-    drawBox(B, o, tw * bw * 0.4, lg + bh * 1.3, -bl * 1.02, bw * 0.09, bh * 0.5, bw * 0.09, Q.tailCol || Q.body);
+    drawBox(B, o, 0, legH + torH * 0.34, -hw * 0.95, hw * 0.42, torH * 0.34, hw * 0.42, Q.tailCol || fur);
   else if (Q.tail === 'up')
-    drawBox(B, o, tw * bw * 0.5, lg + bh * 2.0, -bl * 0.95, bw * 0.10, bh * 0.7, bw * 0.10, Q.tailCol || Q.body);
-}
-function drawBird(B, o, s, Q, yaw) {
-  var bw = Q.bw * s, bh = Q.bh * s, bl = Q.bl * s, lg = Q.leg * s, nk = Q.neck * s;
-  var wob = Math.sin(gTime * 1.4 + o[0]) * 0.12;
-  for (var i = -1; i <= 1; i += 2) {
-    drawBox(B, o, i * bw * 0.38, lg * 0.5, bl * 0.05, bw * 0.09, lg * 0.5, bw * 0.09, Q.legCol || [226,158,64]);
-    drawBox(B, o, i * bw * 0.38, 0.02 * s, bl * 0.05 + bw * 0.16, bw * 0.13, 0.02 * s, bw * 0.18, Q.legCol || [226,158,64]);
-  }
-  /* body: a low egg — wide at the breast, tapering to the tail */
-  drawBox(B, o, 0, lg + bh * 0.9, 0, bw, bh * 0.9, bl, Q.body);
-  drawBox(B, o, 0, lg + bh * 1.62, -bl * 0.12, bw * 0.74, bh * 0.42, bl * 0.78, Q.body);
-  drawBox(B, o, 0, lg + bh * 0.82, bl * 0.42, bw * 0.82, bh * 0.72, bl * 0.42, Q.belly || Q.body);
-  for (var w = -1; w <= 1; w += 2)                                   /* wings tucked in */
-    drawBox(B, o, w * bw * 0.88, lg + bh * 1.05, -bl * 0.04, bw * 0.13, bh * 0.44, bl * 0.58, Q.wing || Q.body);
-  /* tail */
-  if (Q.tailUp) {
-    var Bt = basis(yaw, -0.85, 0);
-    drawBox(Bt, ptOf(B, o, 0, lg + bh * 1.5, -bl * 0.9), 0, 0, bl * 0.42, bw * 0.42, bh * 0.20, bl * 0.42, Q.wing || Q.body);
-  } else {
-    drawBox(B, o, 0, lg + bh * 1.15, -bl * 1.06, bw * 0.46, bh * 0.24, bl * 0.3, Q.wing || Q.body);
-  }
-  /* neck on its own pitched frame, so it actually rises out of the shoulders */
-  var pitch = (Q.neckPitch || 1.05) + wob * 0.3;
-  var Bn = basis(yaw, pitch, 0);
-  var base = ptOf(B, o, 0, lg + bh * 1.45, bl * 0.42);
-  drawBox(Bn, base, 0, 0, nk * 0.5, bw * 0.19, bw * 0.19, nk * 0.55, Q.body);
-  var top = ptOf(Bn, base, 0, 0, nk);
-  /* head sits on the neck, beak out front */
-  drawBox(B, top, 0, bh * 0.30, bw * 0.14, bw * 0.30, bh * 0.34, bw * 0.34, Q.head || Q.body);
-  drawBox(B, top, bw * 0.17, bh * 0.36, bw * 0.14 + bw * 0.22, bw * 0.055, bh * 0.07, 0.015 * s, [34,28,24]);
-  drawBox(B, top, -bw * 0.17, bh * 0.36, bw * 0.14 + bw * 0.22, bw * 0.055, bh * 0.07, 0.015 * s, [34,28,24]);
-  var beakL = (Q.pouch ? 1.35 : 0.62) * bw;
-  drawBox(B, top, 0, bh * 0.22, bw * 0.14 + bw * 0.28 + beakL * 0.5,
-          bw * 0.14, bh * 0.13, beakL * 0.5, Q.beak || [232,162,60]);
-  if (Q.pouch)
-    drawBox(B, top, 0, bh * 0.22 - bh * 0.30, bw * 0.14 + bw * 0.28 + beakL * 0.45,
-            bw * 0.20, bh * 0.26, beakL * 0.40, Q.pouchCol || [238,190,140]);
-  if (Q.comb) {
-    drawBox(B, top, 0, bh * 0.72, bw * 0.14, bw * 0.06, bh * 0.22, bw * 0.22, [198,66,54]);
-    drawBox(B, top, 0, bh * 0.02, bw * 0.20, bw * 0.07, bh * 0.14, bw * 0.10, [198,66,54]);
-  }
-}
-function drawTortoise(B, o, s, Q) {
-  var bw = 0.36 * s, bl = 0.46 * s;
-  for (var i = 0; i < 4; i++) {
-    var lx = (i % 2 ? 1 : -1) * bw * 0.72, lz = (i < 2 ? 1 : -1) * bl * 0.58;
-    drawBox(B, o, lx, 0.07 * s, lz, bw * 0.22, 0.07 * s, bw * 0.22, Q.skin);
-  }
-  drawBox(B, o, 0, 0.16 * s, 0, bw, 0.10 * s, bl, Q.shell2 || Q.shell);
-  drawBox(B, o, 0, 0.30 * s, 0, bw * 0.86, 0.14 * s, bl * 0.86, Q.shell);
-  drawBox(B, o, 0, 0.40 * s, 0, bw * 0.5, 0.10 * s, bl * 0.5, Q.shell2 || Q.shell);
-  var poke = (Math.sin(gTime * 0.8 + o[2]) * 0.5 + 0.5) * 0.14 * s;
-  drawBox(B, o, 0, 0.20 * s, bl * 0.8 + poke, bw * 0.24, 0.09 * s, 0.16 * s, Q.skin);
-  drawBox(B, o, 0, 0.26 * s, bl * 0.95 + poke, bw * 0.20, 0.08 * s, 0.10 * s, Q.skin);
-  drawBox(B, o, bw * 0.11, 0.29 * s, bl * 1.02 + poke, 0.03 * s, 0.03 * s, 0.02 * s, [36,30,26]);
-  drawBox(B, o, -bw * 0.11, 0.29 * s, bl * 1.02 + poke, 0.03 * s, 0.03 * s, 0.02 * s, [36,30,26]);
-  if (Q.habit) drawBox(B, o, 0, 0.30 * s, -bl * 0.2, bw * 0.94, 0.12 * s, bl * 0.5, Q.habit);
+    drawBox(B, o, 0, legH + torH * 0.9 + Math.sin(walk * 0.5) * 0.02 * s, -hw * 0.9,
+            0.05 * s, torH * 0.5, 0.05 * s, Q.tailCol || fur);
+  else if (Q.tail === 'stub')
+    drawBox(B, o, 0, legH + torH * 0.4, -hw * 0.9, 0.06 * s, 0.06 * s, 0.05 * s, Q.tailCol || fur);
+  /* wings folded at the sides, for the birds */
+  if (Q.feat === 'bird' && !lod) for (i = -1; i <= 1; i += 2)
+    drawBox(B, o, i * (hw + 0.045 * s), legH + torH * 0.60, -0.01 * s,
+            0.035 * s, torH * 0.44, hw * 0.62, Q.wing || fur);
 }
 var SPECIES = {
-  goose:    { draw: drawBird, s: 1.0, p: { bw:0.19, bh:0.17, bl:0.34, leg:0.22, neck:0.42, neckPitch:1.25,
-              body:[244,240,230], belly:[252,250,244], wing:[222,216,202], head:[246,242,232], beak:[236,160,58] } },
-  gull:     { draw: drawBird, s: 0.9, p: { bw:0.18, bh:0.15, bl:0.32, leg:0.20, neck:0.22, neckPitch:1.1,
-              body:[248,246,240], belly:[255,254,250], wing:[168,176,190], head:[250,248,244], beak:[238,186,64] } },
-  hen:      { draw: drawBird, s: 0.85, p: { bw:0.19, bh:0.17, bl:0.26, leg:0.16, neck:0.18, neckPitch:1.2,
-              comb:true, tailUp:true,
-              body:[178,116,66], belly:[204,150,94], wing:[146,92,52], head:[190,126,72], beak:[230,178,74] } },
-  pelican:  { draw: drawBird, s: 1.2, p: { bw:0.23, bh:0.20, bl:0.42, leg:0.24, neck:0.34, neckPitch:1.15, pouch:true,
-              body:[238,236,230], belly:[248,246,240], wing:[196,198,204], head:[242,240,236],
-              beak:[238,182,86], pouchCol:[236,176,120] } },
-  goat:     { draw: drawQuad, s: 1.0, p: { bw:0.20, bh:0.18, bl:0.36, leg:0.30, neck:0.10, ear:'horn', tail:'up',
-              body:[214,198,168], belly:[236,226,204], head:[224,210,182], legCol:[176,160,132],
-              horn:[150,132,104], beard:[240,232,214] } },
-  fox:      { draw: drawQuad, s: 0.95, p: { bw:0.17, bh:0.15, bl:0.36, leg:0.24, neck:0.08, ear:'point', tail:'bush',
-              body:[198,110,58], belly:[244,238,226], head:[206,120,64], legCol:[92,70,58],
-              snout:[236,230,218], tailCol:[214,138,84] } },
-  donkey:   { draw: drawQuad, s: 1.3, p: { bw:0.22, bh:0.22, bl:0.44, leg:0.38, neck:0.14, ear:'long', tail:'thin',
-              body:[158,150,142], belly:[206,200,190], head:[168,160,150], legCol:[130,124,116],
-              snout:[214,208,198] } },
-  cat:      { draw: drawQuad, s: 0.72, p: { bw:0.14, bh:0.13, bl:0.28, leg:0.20, neck:0.06, ear:'point', tail:'up',
-              body:[92,86,84], belly:[226,220,210], head:[100,94,92], legCol:[80,74,72] } },
-  sheep:    { draw: drawQuad, s: 1.0, p: { bw:0.22, bh:0.22, bl:0.36, leg:0.24, neck:0.08, ear:'round', tail:'none',
-              body:[240,236,226], belly:[248,246,240], head:[86,80,76], legCol:[80,74,70] } },
-  tortoise: { draw: drawTortoise, s: 1.0, p: { shell:[126,104,62], shell2:[96,80,50], skin:[150,158,116] } }
+  goose:    { h: 1.20, p: { feat:'bird', body:[246,242,232], head:[248,246,238], wing:[224,218,204],
+              beak:[236,160,58], legCol:[232,168,72], footCol:[226,158,64], cloth:CLOTHES[1] } },
+  gull:     { h: 1.10, p: { feat:'bird', body:[250,248,244], head:[252,250,246], wing:[168,176,190],
+              beak:[238,186,64], legCol:[236,190,80], cloth:CLOTHES[5] } },
+  hen:      { h: 1.02, p: { feat:'bird', comb:true, body:[186,122,70], head:[198,132,78], wing:[150,94,54],
+              beak:[230,178,74], legCol:[228,172,80], cloth:CLOTHES[3] } },
+  pelican:  { h: 1.34, p: { feat:'bird', pouch:true, wide:true, body:[240,238,232], head:[244,242,238],
+              wing:[196,198,204], beak:[238,182,86], pouchCol:[236,176,120],
+              legCol:[226,178,96], cloth:CLOTHES[6] } },
+  goat:     { h: 1.24, p: { feat:'fur', ear:'horn', tail:'stub', muzzle:0.26, body:[220,206,178],
+              head:[230,218,192], snout:[240,232,214], horn:[150,132,104], beard:[242,236,220],
+              legCol:[196,180,152], cloth:CLOTHES[2] } },
+  fox:      { h: 1.18, p: { feat:'fur', ear:'point', tail:'bush', muzzle:0.30, body:[204,116,62],
+              head:[210,124,68], snout:[240,234,222], tailCol:[218,142,88], inner:[236,178,160],
+              legCol:[92,70,58], cloth:CLOTHES[0], bib:[244,238,226] } },
+  donkey:   { h: 1.38, p: { feat:'fur', ear:'long', tail:'stub', muzzle:0.30, wide:true, body:[164,156,148],
+              head:[172,164,154], snout:[214,208,198], legCol:[132,126,118], cloth:CLOTHES[8] } },
+  cat:      { h: 1.06, p: { feat:'fur', ear:'point', tail:'up', muzzle:0.18, body:[104,98,96],
+              head:[112,106,102], snout:[226,220,210], inner:[228,168,158],
+              legCol:[88,82,80], cloth:CLOTHES[7] } },
+  sheep:    { h: 1.16, p: { feat:'fur', ear:'round', tail:'stub', muzzle:0.20, wide:true,
+              body:[244,240,232], head:[92,86,82], snout:[120,112,106], wool:[250,248,242],
+              legCol:[86,80,76], cloth:CLOTHES[4] } },
+  tortoise: { h: 1.04, p: { feat:'shell', ear:'none', muzzle:0.20, body:[152,160,118],
+              head:[158,166,124], shell:[128,106,64], shell2:[98,82,52], plastron:[216,196,138],
+              legCol:[136,144,104], cloth:CLOTHES[3] } }
 };
 function drawCritter(c) {
   var dx = c.x - camX, dz = c.z - camZ, d = Math.sqrt(dx * dx + dz * dz);
   if (d > 230) return;
   if (d > 30 && (dx * fx + dz * fz) / d < COS_CULL) return;
   if (d > 120 && !visible(c.x, c.y + 1.5, c.z)) return;
-  var sp = SPECIES[c.species], sc = sp.s * (c.scale || 1) * 1.4;
-  var hop = c.hop ? Math.abs(Math.sin(gTime * 3.4 + c.ph)) * 0.06 : 0;
-  var yawUsed = c.yaw + Math.sin(gTime * 0.4 + c.ph) * 0.18;
+  var sp = SPECIES[c.species], sc = sp.h * (c.scale || 1);
+  var walk = c.walk || 0;
+  var idle = Math.sin(gTime * 1.3 + c.ph) * 0.012;                 /* breathing */
+  var yawUsed = c.yaw + Math.sin(gTime * 0.5 + c.ph) * 0.10;
   var B = basis(yawUsed, 0, 0);
   B.yaw0 = c.yaw; B.yawUsed = yawUsed;
-  shadowAt(c.x, c.y, c.z, 0.5 * sc, 0.30);
-  sp.draw(B, [c.x, c.y + hop, c.z], sc, sp.p, B.yawUsed);
+  shadowAt(c.x, c.y, c.z, 0.34 * sc, 0.30);
+  drawVillager(B, [c.x, c.y + idle, c.z], sc, sp.p, walk, d > 75);
   if (c.name && (c.quest ? d < 40 : c === nearestNamed) && d < 46) {   /* who is that? */
-    var yTop = c.y + 1.15 * sc;
+    var yTop = c.y + 1.28 * sc;
     if (project(c.x, yTop, c.z)) {
       var sx = _px, sy = _py, dd = _pd;
       dlPush(-2, { f: function () {
-        var a = clamp(1 - (dd - 40) / 24, 0.15, 1);
+        var a = clamp(1 - (dd - 30) / 18, 0.15, 1);
         ctx.globalAlpha = a; ctx.font = '12px Georgia, serif'; ctx.textAlign = 'center';
         var w = ctx.measureText(c.name).width;
         ctx.fillStyle = 'rgba(32,22,14,.5)';
@@ -2046,6 +2038,13 @@ function drawCritter(c) {
   }
 }
 var nearestNamed = null;
+function faceThePlayer(c, dt) {
+  var pd = dist2(c.x, c.z, P.x, P.z);
+  if (pd < 16 && !P.flying) {
+    var toYou = Math.atan2(P.x - c.x, P.z - c.z);
+    c.yaw += wrapAng(toYou - c.yaw) * clamp(1.8 * dt, 0, 1);
+  }
+}
 function drawCritters() {
   /* only the closest named local gets a label, or the village turns into a smear */
   nearestNamed = null;
@@ -2235,9 +2234,10 @@ function buildCritters() {
 }
 /* they potter about, and scatter when you come barrelling through */
 function updateCritters(dt) {
+  for (var w = 0; w < WANDERERS.length; w++) faceThePlayer(WANDERERS[w], dt);
   for (var i = 0; i < CRITTERS.length; i++) {
     var c = CRITTERS[i];
-    if (!c.wander) continue;
+    if (!c.wander) { faceThePlayer(c, dt); continue; }
     var d = dist2(c.x, c.z, camX, camZ);
     if (d > 170) continue;
     var pd = dist2(c.x, c.z, P.x, P.z);
@@ -2245,6 +2245,7 @@ function updateCritters(dt) {
       var away = Math.atan2(c.x - P.x, c.z - P.z);
       c.yaw = away;
       c.x += Math.sin(away) * 4.2 * dt; c.z += Math.cos(away) * 4.2 * dt;
+      c.walk = (c.walk || 0) + dt * 14;   /* leg it */
     } else {
       c.t = (c.t || 0) - dt;
       if (c.t <= 0) { c.t = 2 + Math.random() * 4; c.goal = Math.random() < 0.55 ? null
@@ -2256,8 +2257,13 @@ function updateCritters(dt) {
           var ga = Math.atan2(c.goal.x - c.x, c.goal.z - c.z);
           c.yaw += wrapAng(ga - c.yaw) * clamp(3 * dt, 0, 1);
           c.x += Math.sin(c.yaw) * 0.85 * dt; c.z += Math.cos(c.yaw) * 0.85 * dt;
+          c.walk = (c.walk || 0) + dt * 6.5;                    /* stride */
         }
-      }
+      } else if (pd < 15 && !P.flying) {                        /* look who it is */
+        var toYou = Math.atan2(P.x - c.x, P.z - c.z);
+        c.yaw += wrapAng(toYou - c.yaw) * clamp(1.6 * dt, 0, 1);
+        c.walk = lerp(c.walk || 0, 0, clamp(4 * dt, 0, 1));
+      } else c.walk = lerp(c.walk || 0, 0, clamp(3 * dt, 0, 1));
     }
     if (dist2(c.x, c.z, c.home.x, c.home.z) > 22) {
       var back = Math.atan2(c.home.x - c.x, c.home.z - c.z);
