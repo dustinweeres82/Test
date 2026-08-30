@@ -238,6 +238,16 @@ function resize(){
   W = Math.round(vw*q); H = Math.round(vh*q);
   cv.width=W; cv.height=H; cv.style.width=vw+'px'; cv.style.height=vh+'px';
   HW=W/2; HH=H/2; FOCAL = HH/Math.tan(FOV/2); UPS = OW/W;
+  buildVignette();
+}
+/* a soft corner darkening plus a warm centre lift — the cheap half of a grade */
+var vignette=null;
+function buildVignette(){
+  var g=ctx.createRadialGradient(HW,HH*0.94,Math.min(W,H)*0.30,HW,HH,Math.max(W,H)*0.76);
+  g.addColorStop(0,   'rgba(255,236,196,0.05)');
+  g.addColorStop(0.55,'rgba(255,236,196,0)');
+  g.addColorStop(1,   'rgba(48,36,52,0.26)');
+  vignette=g;
 }
 window.addEventListener('resize', resize); resize();
 
@@ -257,7 +267,7 @@ function dlPush(d,item){ item.d=d; if(DLn<DL.length) DL[DLn]=item; else DL.push(
 var LABELS=[], LABELn=0;
 function pushLabel(fn){ if(LABELn<LABELS.length) LABELS[LABELn]=fn; else LABELS.push(fn); LABELn++; }
 
-var FAR=260, FOGSTART=55, SKYC=[150,208,238], FOGC=[214,226,226];
+var FAR=260, FOGSTART=62, SKYC=[126,198,238], FOGC=[224,220,204];
 function fogc(c,d){ var t=clamp((d-FOGSTART)/(FAR-FOGSTART),0,1); return mixc(c,FOGC,t*t*0.92); }
 var _vx=0,_vy=0,_vz=0;
 function toView(x,y,z){ var dx=x-camX,dy=y-camY,dz=z-camZ;
@@ -524,7 +534,7 @@ function sprite(x,y,z,fn,bias){
 /* ═══════════════════════════════════════════════════════════════════════════
    3. THE STATION — a slab of concrete in a very large desert
    ═══════════════════════════════════════════════════════════════════════════ */
-var C_SAND=[224,196,146], C_SAND2=[208,178,128], C_ROAD=[86,88,94], C_LOT=[176,172,166],
+var C_SAND=[232,196,132], C_SAND2=[212,170,110], C_ROAD=[82,82,90], C_LOT=[196,188,174],
     C_CONC=[196,192,184], C_STEEL=[92,104,120], C_BLUE=[64,116,190], C_ORANGE=[240,150,52],
     C_WHITE=[248,248,244], C_DARK=[46,58,70], C_GLASS=[168,214,232], C_CACTUS=[86,146,92];
 
@@ -1619,6 +1629,7 @@ function render(){
   drawHeld();
   queueBubbles();
   flush();
+  if(vignette){ ctx.fillStyle=vignette; ctx.fillRect(0,0,W,H); }
   drawWorldLabels();
 }
 var last=0, titleUp=true;
