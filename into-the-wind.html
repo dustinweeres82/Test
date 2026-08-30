@@ -1596,6 +1596,8 @@ function phaseName() {
 function newDay(restQuality) {
   day++;
   dayT = 0.08;
+  pirateIntel = false;
+  spawnWanderers();
   stamina = clamp(restQuality, 0.3, 1);
   /* overdue jobs are dropped with a penalty */
   for (var i = HOLD.length - 1; i >= 0; i--) {
@@ -1883,6 +1885,389 @@ function nightfall() {
   ]);
 }
 /* ═══════════════════════════════════════════════════════════════════════════
+   10b. THE LOCALS — geese, goats and one extremely slow abbess
+   ═══════════════════════════════════════════════════════════════════════════ */
+var CRITTERS = [], WANDERERS = [], pirateIntel = false, wanderSeq = 0;
+function ptOf(B, o, x, y, z) {
+  return [o[0] + B.r[0]*x + B.u[0]*y + B.f[0]*z,
+          o[1] + B.r[1]*x + B.u[1]*y + B.f[1]*z,
+          o[2] + B.r[2]*x + B.u[2]*y + B.f[2]*z];
+}
+
+/* ── bodies: one quadruped builder, one bird builder, one tortoise ───────── */
+function drawQuad(B, o, s, Q) {
+  var bw = Q.bw * s, bh = Q.bh * s, bl = Q.bl * s, lg = Q.leg * s, nk = Q.neck * s;
+  var head = Q.head || Q.body, i;
+  for (i = 0; i < 4; i++) {
+    var lx = (i % 2 ? 1 : -1) * bw * 0.62, lz = (i < 2 ? 1 : -1) * bl * 0.58;
+    drawBox(B, o, lx, lg * 0.5, lz, bw * 0.15, lg * 0.5, bw * 0.15, Q.legCol || head);
+  }
+  drawBox(B, o, 0, lg + bh, 0, bw, bh, bl, Q.body);
+  if (Q.belly) drawBox(B, o, 0, lg + bh * 0.62, bl * 0.12, bw * 0.84, bh * 0.44, bl * 0.78, Q.belly);
+  drawBox(B, o, 0, lg + bh * 1.4 + nk * 0.5, bl * 0.66, bw * 0.40, bh * 0.5 + nk * 0.5, bw * 0.40, Q.body);
+  var hy = lg + bh * 1.9 + nk;
+  drawBox(B, o, 0, hy, bl * 0.86, bw * 0.46, bh * 0.58, bw * 0.5, head);
+  drawBox(B, o, 0, hy - bh * 0.22, bl * 0.86 + bw * 0.46, bw * 0.24, bh * 0.3, bw * 0.3, Q.snout || head);
+  drawBox(B, o, bw * 0.22, hy + bh * 0.12, bl * 0.86 + bw * 0.3, bw * 0.07, bh * 0.09, 0.02 * s, [40,34,30]);
+  drawBox(B, o, -bw * 0.22, hy + bh * 0.12, bl * 0.86 + bw * 0.3, bw * 0.07, bh * 0.09, 0.02 * s, [40,34,30]);
+  for (i = -1; i <= 1; i += 2) {                                     /* ears or horns */
+    if (Q.ear === 'long')
+      drawBox(B, o, i * bw * 0.30, hy + bh * 0.72, bl * 0.74, bw * 0.13, bh * 0.46, bw * 0.10, head);
+    else if (Q.ear === 'horn') {
+      drawBox(B, o, i * bw * 0.34, hy + bh * 0.66, bl * 0.78, bw * 0.11, bh * 0.42, bw * 0.13, Q.horn || [212,196,164]);
+      drawBox(B, o, i * bw * 0.34, hy + bh * 1.02, bl * 0.62, bw * 0.10, bh * 0.16, bw * 0.22, Q.horn || [212,196,164]);
+      drawBox(B, o, i * bw * 0.52, hy + bh * 0.30, bl * 0.80, bw * 0.16, bh * 0.12, bw * 0.09, head);
+    }
+    else if (Q.ear === 'point')
+      drawBox(B, o, i * bw * 0.36, hy + bh * 0.72, bl * 0.80, bw * 0.16, bh * 0.42, bw * 0.08, head);
+    else
+      drawBox(B, o, i * bw * 0.42, hy + bh * 0.42, bl * 0.80, bw * 0.14, bh * 0.26, bw * 0.09, head);
+  }
+  if (Q.beard) drawBox(B, o, 0, hy - bh * 0.75, bl * 0.9, bw * 0.14, bh * 0.42, bw * 0.14, Q.beard);
+  var tw = Math.sin(gTime * 3.1 + (o[0] + o[2])) * 0.28;
+  var Bt = basis(B.yaw0 + tw, 0, 0);
+  if (Q.tail === 'bush')
+    drawBox(B, o, tw * bw * 0.5, lg + bh * 1.5, -bl * 1.05, bw * 0.34, bh * 0.42, bl * 0.34, Q.tailCol || head);
+  else if (Q.tail === 'thin')
+    drawBox(B, o, tw * bw * 0.4, lg + bh * 1.3, -bl * 1.02, bw * 0.09, bh * 0.5, bw * 0.09, Q.tailCol || Q.body);
+  else if (Q.tail === 'up')
+    drawBox(B, o, tw * bw * 0.5, lg + bh * 2.0, -bl * 0.95, bw * 0.10, bh * 0.7, bw * 0.10, Q.tailCol || Q.body);
+}
+function drawBird(B, o, s, Q, yaw) {
+  var bw = Q.bw * s, bh = Q.bh * s, bl = Q.bl * s, lg = Q.leg * s, nk = Q.neck * s;
+  var wob = Math.sin(gTime * 1.4 + o[0]) * 0.12;
+  for (var i = -1; i <= 1; i += 2) {
+    drawBox(B, o, i * bw * 0.38, lg * 0.5, bl * 0.05, bw * 0.09, lg * 0.5, bw * 0.09, Q.legCol || [226,158,64]);
+    drawBox(B, o, i * bw * 0.38, 0.02 * s, bl * 0.05 + bw * 0.16, bw * 0.13, 0.02 * s, bw * 0.18, Q.legCol || [226,158,64]);
+  }
+  /* body: a low egg — wide at the breast, tapering to the tail */
+  drawBox(B, o, 0, lg + bh * 0.9, 0, bw, bh * 0.9, bl, Q.body);
+  drawBox(B, o, 0, lg + bh * 1.62, -bl * 0.12, bw * 0.74, bh * 0.42, bl * 0.78, Q.body);
+  drawBox(B, o, 0, lg + bh * 0.82, bl * 0.42, bw * 0.82, bh * 0.72, bl * 0.42, Q.belly || Q.body);
+  for (var w = -1; w <= 1; w += 2)                                   /* wings tucked in */
+    drawBox(B, o, w * bw * 0.88, lg + bh * 1.05, -bl * 0.04, bw * 0.13, bh * 0.44, bl * 0.58, Q.wing || Q.body);
+  /* tail */
+  if (Q.tailUp) {
+    var Bt = basis(yaw, -0.85, 0);
+    drawBox(Bt, ptOf(B, o, 0, lg + bh * 1.5, -bl * 0.9), 0, 0, bl * 0.42, bw * 0.42, bh * 0.20, bl * 0.42, Q.wing || Q.body);
+  } else {
+    drawBox(B, o, 0, lg + bh * 1.15, -bl * 1.06, bw * 0.46, bh * 0.24, bl * 0.3, Q.wing || Q.body);
+  }
+  /* neck on its own pitched frame, so it actually rises out of the shoulders */
+  var pitch = (Q.neckPitch || 1.05) + wob * 0.3;
+  var Bn = basis(yaw, pitch, 0);
+  var base = ptOf(B, o, 0, lg + bh * 1.45, bl * 0.42);
+  drawBox(Bn, base, 0, 0, nk * 0.5, bw * 0.19, bw * 0.19, nk * 0.55, Q.body);
+  var top = ptOf(Bn, base, 0, 0, nk);
+  /* head sits on the neck, beak out front */
+  drawBox(B, top, 0, bh * 0.30, bw * 0.14, bw * 0.30, bh * 0.34, bw * 0.34, Q.head || Q.body);
+  drawBox(B, top, bw * 0.17, bh * 0.36, bw * 0.14 + bw * 0.22, bw * 0.055, bh * 0.07, 0.015 * s, [34,28,24]);
+  drawBox(B, top, -bw * 0.17, bh * 0.36, bw * 0.14 + bw * 0.22, bw * 0.055, bh * 0.07, 0.015 * s, [34,28,24]);
+  var beakL = (Q.pouch ? 1.35 : 0.62) * bw;
+  drawBox(B, top, 0, bh * 0.22, bw * 0.14 + bw * 0.28 + beakL * 0.5,
+          bw * 0.14, bh * 0.13, beakL * 0.5, Q.beak || [232,162,60]);
+  if (Q.pouch)
+    drawBox(B, top, 0, bh * 0.22 - bh * 0.30, bw * 0.14 + bw * 0.28 + beakL * 0.45,
+            bw * 0.20, bh * 0.26, beakL * 0.40, Q.pouchCol || [238,190,140]);
+  if (Q.comb) {
+    drawBox(B, top, 0, bh * 0.72, bw * 0.14, bw * 0.06, bh * 0.22, bw * 0.22, [198,66,54]);
+    drawBox(B, top, 0, bh * 0.02, bw * 0.20, bw * 0.07, bh * 0.14, bw * 0.10, [198,66,54]);
+  }
+}
+function drawTortoise(B, o, s, Q) {
+  var bw = 0.36 * s, bl = 0.46 * s;
+  for (var i = 0; i < 4; i++) {
+    var lx = (i % 2 ? 1 : -1) * bw * 0.72, lz = (i < 2 ? 1 : -1) * bl * 0.58;
+    drawBox(B, o, lx, 0.07 * s, lz, bw * 0.22, 0.07 * s, bw * 0.22, Q.skin);
+  }
+  drawBox(B, o, 0, 0.16 * s, 0, bw, 0.10 * s, bl, Q.shell2 || Q.shell);
+  drawBox(B, o, 0, 0.30 * s, 0, bw * 0.86, 0.14 * s, bl * 0.86, Q.shell);
+  drawBox(B, o, 0, 0.40 * s, 0, bw * 0.5, 0.10 * s, bl * 0.5, Q.shell2 || Q.shell);
+  var poke = (Math.sin(gTime * 0.8 + o[2]) * 0.5 + 0.5) * 0.14 * s;
+  drawBox(B, o, 0, 0.20 * s, bl * 0.8 + poke, bw * 0.24, 0.09 * s, 0.16 * s, Q.skin);
+  drawBox(B, o, 0, 0.26 * s, bl * 0.95 + poke, bw * 0.20, 0.08 * s, 0.10 * s, Q.skin);
+  drawBox(B, o, bw * 0.11, 0.29 * s, bl * 1.02 + poke, 0.03 * s, 0.03 * s, 0.02 * s, [36,30,26]);
+  drawBox(B, o, -bw * 0.11, 0.29 * s, bl * 1.02 + poke, 0.03 * s, 0.03 * s, 0.02 * s, [36,30,26]);
+  if (Q.habit) drawBox(B, o, 0, 0.30 * s, -bl * 0.2, bw * 0.94, 0.12 * s, bl * 0.5, Q.habit);
+}
+var SPECIES = {
+  goose:    { draw: drawBird, s: 1.0, p: { bw:0.19, bh:0.17, bl:0.34, leg:0.22, neck:0.42, neckPitch:1.25,
+              body:[244,240,230], belly:[252,250,244], wing:[222,216,202], head:[246,242,232], beak:[236,160,58] } },
+  gull:     { draw: drawBird, s: 0.9, p: { bw:0.18, bh:0.15, bl:0.32, leg:0.20, neck:0.22, neckPitch:1.1,
+              body:[248,246,240], belly:[255,254,250], wing:[168,176,190], head:[250,248,244], beak:[238,186,64] } },
+  hen:      { draw: drawBird, s: 0.85, p: { bw:0.19, bh:0.17, bl:0.26, leg:0.16, neck:0.18, neckPitch:1.2,
+              comb:true, tailUp:true,
+              body:[178,116,66], belly:[204,150,94], wing:[146,92,52], head:[190,126,72], beak:[230,178,74] } },
+  pelican:  { draw: drawBird, s: 1.2, p: { bw:0.23, bh:0.20, bl:0.42, leg:0.24, neck:0.34, neckPitch:1.15, pouch:true,
+              body:[238,236,230], belly:[248,246,240], wing:[196,198,204], head:[242,240,236],
+              beak:[238,182,86], pouchCol:[236,176,120] } },
+  goat:     { draw: drawQuad, s: 1.0, p: { bw:0.20, bh:0.18, bl:0.36, leg:0.30, neck:0.10, ear:'horn', tail:'up',
+              body:[214,198,168], belly:[236,226,204], head:[224,210,182], legCol:[176,160,132],
+              horn:[150,132,104], beard:[240,232,214] } },
+  fox:      { draw: drawQuad, s: 0.95, p: { bw:0.17, bh:0.15, bl:0.36, leg:0.24, neck:0.08, ear:'point', tail:'bush',
+              body:[198,110,58], belly:[244,238,226], head:[206,120,64], legCol:[92,70,58],
+              snout:[236,230,218], tailCol:[214,138,84] } },
+  donkey:   { draw: drawQuad, s: 1.3, p: { bw:0.22, bh:0.22, bl:0.44, leg:0.38, neck:0.14, ear:'long', tail:'thin',
+              body:[158,150,142], belly:[206,200,190], head:[168,160,150], legCol:[130,124,116],
+              snout:[214,208,198] } },
+  cat:      { draw: drawQuad, s: 0.72, p: { bw:0.14, bh:0.13, bl:0.28, leg:0.20, neck:0.06, ear:'point', tail:'up',
+              body:[92,86,84], belly:[226,220,210], head:[100,94,92], legCol:[80,74,72] } },
+  sheep:    { draw: drawQuad, s: 1.0, p: { bw:0.22, bh:0.22, bl:0.36, leg:0.24, neck:0.08, ear:'round', tail:'none',
+              body:[240,236,226], belly:[248,246,240], head:[86,80,76], legCol:[80,74,70] } },
+  tortoise: { draw: drawTortoise, s: 1.0, p: { shell:[126,104,62], shell2:[96,80,50], skin:[150,158,116] } }
+};
+function drawCritter(c) {
+  var dx = c.x - camX, dz = c.z - camZ, d = Math.sqrt(dx * dx + dz * dz);
+  if (d > 230) return;
+  if (d > 30 && (dx * fx + dz * fz) / d < COS_CULL) return;
+  if (d > 120 && !visible(c.x, c.y + 1.5, c.z)) return;
+  var sp = SPECIES[c.species], sc = sp.s * (c.scale || 1) * 1.4;
+  var hop = c.hop ? Math.abs(Math.sin(gTime * 3.4 + c.ph)) * 0.06 : 0;
+  var yawUsed = c.yaw + Math.sin(gTime * 0.4 + c.ph) * 0.18;
+  var B = basis(yawUsed, 0, 0);
+  B.yaw0 = c.yaw; B.yawUsed = yawUsed;
+  shadowAt(c.x, c.y, c.z, 0.5 * sc, 0.30);
+  sp.draw(B, [c.x, c.y + hop, c.z], sc, sp.p, B.yawUsed);
+  if (c.name && (c.quest ? d < 40 : c === nearestNamed) && d < 46) {   /* who is that? */
+    var yTop = c.y + 1.15 * sc;
+    if (project(c.x, yTop, c.z)) {
+      var sx = _px, sy = _py, dd = _pd;
+      dlPush(-2, { f: function () {
+        var a = clamp(1 - (dd - 40) / 24, 0.15, 1);
+        ctx.globalAlpha = a; ctx.font = '12px Georgia, serif'; ctx.textAlign = 'center';
+        var w = ctx.measureText(c.name).width;
+        ctx.fillStyle = 'rgba(32,22,14,.5)';
+        ctx.fillRect(sx - w / 2 - 5, sy - 15, w + 10, 17);
+        ctx.fillStyle = c.quest ? '#ffd9a0' : '#fff4e0';
+        ctx.fillText(c.name, sx, sy - 3);
+        ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+      } });
+    }
+  }
+}
+var nearestNamed = null;
+function drawCritters() {
+  /* only the closest named local gets a label, or the village turns into a smear */
+  nearestNamed = null;
+  var bd = 1e9, i;
+  for (i = 0; i < CRITTERS.length; i++) {
+    var c = CRITTERS[i];
+    if (!c.name) continue;
+    var d = dist2(c.x, c.z, camX, camZ);
+    if (d < bd) { bd = d; nearestNamed = c; }
+  }
+  for (i = 0; i < CRITTERS.length; i++) drawCritter(CRITTERS[i]);
+  for (var w = 0; w < WANDERERS.length; w++) drawCritter(WANDERERS[w]);
+}
+/* ── residents: the animals who actually run this valley ─────────────────── */
+var RESIDENTS = [
+  { loc:'home', name:'Nonna Pesca', species:'pelican', title:'keeper of the depot',
+    lines:['Your uncle left the kettle on, you know. Three years ago. I turned it off.',
+           'He used to say the wind owed him money. Then he flew off to collect.',
+           'Eat something. You are all elbows and optimism.',
+           'Aires likes you. She only pretends to complain.'] },
+  { loc:'santa', name:'Fabrizio Honk', species:'goose', title:'pump attendant', role:'pump',
+    lines:['You want the good petrol or the honest petrol? They are the same. It is a joke.',
+           'I hissed at a pirate once. He left. I take full credit.',
+           'Mind the terraces on the way out. The vines have opinions.',
+           'Fill her up? Or shall we stand here admiring the gauge.'] },
+  { loc:'santa', name:'Perpetua Quill', species:'hen', title:'keeper of the board',
+    lines:['Everything on that board is urgent. Some of it is even true.',
+           'If a job sounds too well paid, read the cargo line twice.',
+           'I write the notices. I do not write the weather.'] },
+  { loc:'abbey', name:'Sister Ozymandias', species:'tortoise', title:'abbess, eventually',
+    lines:['I have been crossing this courtyard since Tuesday. It is going well.',
+           'The coffee is fast so that we do not have to be.',
+           'Patience, child. I say that mostly about myself.',
+           'Your uncle sat exactly where you are standing. He also could not sit still.'] },
+  { loc:'falco', name:'Bruno', species:'goat', title:'a goat of business',
+    lines:['I have eaten the invoice. The debt is therefore spiritual.',
+           'Yes, I am the goat from the manifest. I post myself. It is cheaper.',
+           'The roof is structural. I am merely standing on it.'] },
+  { loc:'cortina', name:'Dottore Fennel', species:'fox', title:'vintner, allegedly',
+    lines:['This vintage is insolent, faintly criminal, and mine.',
+           'Do not shake the crates. Wine remembers.',
+           'A fox running a vineyard. Yes. The hens raised the same objection.'] },
+  { loc:'wind', name:'Hector Bray', species:'donkey', title:'mechanic', role:'shop',
+    lines:['You flew her heavy again. I can hear it in the spars.',
+           'Anything can be fixed twice. The third time it becomes a sculpture.',
+           'Braaay. Sorry. That one is not translatable.'] },
+  { loc:'cala', name:'Old Salt Doris', species:'gull', title:'harbourmaster', role:'pump',
+    lines:['Pirates drink in the hotel bar. They tip badly and sing worse.',
+           'Wind off the water at dusk. Land into it or land in it.',
+           'I have stolen chips from better pilots than you. No offence.'] }
+];
+function residentOf(L, role) {
+  for (var i = 0; i < RESIDENTS.length; i++) {
+    var r = RESIDENTS[i];
+    if (r.loc !== L.id) continue;
+    if (role && r.role !== role) continue;
+    if (!role) return r;
+    return r;
+  }
+  return null;
+}
+function say(r) { return r.lines[(Math.random() * r.lines.length) | 0]; }
+
+/* ── wanderers: the ones you meet out on the road ────────────────────────── */
+var WANDER_CAST = [
+  { name:'Nubbins',            species:'hen',      kind:'parcel',
+    hello:'You there! Do you have a rack and a conscience? I need only one of them.',
+    item:'a hatbox (do not ask)', weight:16 },
+  { name:'Gerald Slow',        species:'tortoise', kind:'passenger',
+    hello:'I set out for the coast in spring. It is still spring, but only just. Might I ride?',
+    item:'Gerald himself', weight:38 },
+  { name:'Captain Marzipan',   species:'goose',    kind:'gift', gift:'fuel',
+    hello:'I have a jerrycan and no engine. You have an engine and, I suspect, no fuel.' },
+  { name:'Brambleworth',       species:'cat',      kind:'tip',
+    hello:'I know where the pirates sleep. I know a great many things. I am a cat.' },
+  { name:'Signora Pistachio',  species:'goat',     kind:'parcel',
+    hello:'Six bottles, one cousin, and a wedding that will not wait. Can you help?',
+    item:'six bottles for a wedding', weight:27 },
+  { name:'Beaky Malone',       species:'gull',     kind:'gift', gift:'coin',
+    hello:'Found a purse on the cliff path. Bit heavy for me. Bit honest for me, frankly.' },
+  { name:'Aunt Marzena',       species:'sheep',    kind:'gift', gift:'coffee',
+    hello:'You look like a thermos would fix you. I am rarely wrong about this.' },
+  { name:'Fitzcarraldo',       species:'fox',      kind:'parcel',
+    hello:'A delicate consignment. Unmarked. Entirely legal. Mostly. Largely.',
+    item:'an unmarked, entirely legal crate', weight:33 }
+];
+/* drop a few of them beside the roads, well away from the villages */
+function spawnWanderers() {
+  WANDERERS.length = 0;
+  var rnd = rngFrom(9000 + day * 613), picks = WANDER_CAST.slice(), n = 3;
+  for (var k = 0; k < n && picks.length; k++) {
+    var cast = picks.splice((rnd() * picks.length) | 0, 1)[0];
+    var spot = null;
+    for (var tries = 0; tries < 60 && !spot; tries++) {
+      var seg = RSEG[(rnd() * RSEG.length) | 0];
+      var t = rnd(), x = lerp(seg.ax, seg.bx, t), z = lerp(seg.az, seg.bz, t);
+      var side = rnd() < 0.5 ? 1 : -1, ang = Math.atan2(seg.bx - seg.ax, seg.bz - seg.az) + PI / 2;
+      x += Math.cos(ang) * 8.5 * side; z += Math.sin(ang) * 8.5 * side;
+      var near = false;
+      for (var i = 0; i < LOCS.length; i++) if (dist2(x, z, LOCS[i].x, LOCS[i].z) < 110) near = true;
+      if (!near) spot = { x: x, z: z, yaw: Math.atan2(seg.bx - seg.ax, seg.bz - seg.az) + PI / 2 * side };
+    }
+    if (!spot) continue;
+    var dest = LOCS[(rnd() * LOCS.length) | 0];
+    WANDERERS.push({ id: ++wanderSeq, x: spot.x, y: groundH(spot.x, spot.z), z: spot.z, yaw: spot.yaw,
+      species: cast.species, name: cast.name, cast: cast, quest: true, ph: rnd() * TAU, hop: cast.species !== 'tortoise',
+      dest: dest, pay: Math.round(dist2(spot.x, spot.z, dest.x, dest.z) * 0.42 + (cast.weight || 20) * 2.4 + 60) });
+  }
+}
+function nearWanderer() {
+  for (var i = 0; i < WANDERERS.length; i++)
+    if (dist2(P.x, P.z, WANDERERS[i].x, WANDERERS[i].z) < 14 && !P.flying) return WANDERERS[i];
+  return null;
+}
+function dropWanderer(w) {
+  var i = WANDERERS.indexOf(w); if (i >= 0) WANDERERS.splice(i, 1);
+}
+function wandererSheet(w) {
+  var c = w.cast, opts = [], room = cargoWt() + (c.weight || 0) <= rackCap();
+  if (c.kind === 'parcel' || c.kind === 'passenger') {
+    opts.push({ t: (c.kind === 'passenger' ? 'Give ' + w.name + ' a lift to ' : 'Carry it to ') + w.dest.name,
+      right: '+' + money$(w.pay), dis: !room,
+      d: '<span class="tag">' + (c.kind === 'passenger' ? 'Lively' : 'Crates') + '</span>' +
+         c.weight + ' kg · ' + Math.round(dist2(P.x, P.z, w.dest.x, w.dest.z)) + ' m' +
+         (room ? '' : ' · <b>no room on the rack</b>'),
+      fn: function () {
+        HOLD.push({ id: jobSeq++, from: 'road', to: w.dest.id,
+          kind: c.kind === 'passenger' ? 'lively' : 'standard',
+          kindLabel: c.kind === 'passenger' ? 'Lively' : 'Crates',
+          name: c.item, weight: c.weight, pay: w.pay, rush: false, due: day + 2, cond: 100,
+          desc: 'A favour picked up on the road.' });
+        dropWanderer(w); closeSheet();
+        toast(c.kind === 'passenger' ? w.name + ' climbs aboard, slowly.' : 'Loaded: ' + c.item);
+      } });
+  } else if (c.kind === 'tip') {
+    opts.push({ t: 'Ask where the pirates are', right: 'free',
+      d: pirateIntel ? 'You already know. He will tell you again anyway.'
+                     : 'They show on your map and your compass once you know where to look.',
+      fn: function () { pirateIntel = true; dropWanderer(w); closeSheet();
+        toast('“Third valley, where the thermals stack. Mind the leader.”'); } });
+  } else if (c.kind === 'gift') {
+    var give = c.gift;
+    opts.push({ t: give === 'fuel' ? 'Accept the jerrycan' : give === 'coffee' ? 'Accept the thermos' : 'Accept the purse',
+      right: give === 'fuel' ? '+30 litres' : give === 'coffee' ? '+ focus' : '+' + money$(90),
+      d: 'No charge. People are like that out here.',
+      fn: function () {
+        if (give === 'fuel') P.fuel = Math.min(fuelMax(), P.fuel + 30);
+        else if (give === 'coffee') stamina = clamp(stamina + 0.45, 0, 1);
+        else money += 90;
+        dropWanderer(w); closeSheet();
+        toast(w.name + ': “Go on then. Mind the corners.”');
+      } });
+  }
+  opts.push({ t: 'Pass the time', d: 'Everyone out here has something to say.',
+    fn: function () { toast(w.name + ': “' + c.hello + '”'); } });
+  opts.push({ rule: true });
+  opts.push({ t: 'Back to the road', fn: closeSheet });
+  showSheet(w.name, '“' + c.hello + '”', opts);
+}
+/* ── ambient livestock milling about the villages ────────────────────────── */
+function buildCritters() {
+  CRITTERS.length = 0;
+  var rnd = rngFrom(777);
+  for (var i = 0; i < RESIDENTS.length; i++) {                 /* the named locals */
+    var r = RESIDENTS[i], L = loc(r.loc);
+    var a = rnd() * TAU, rr = 3.5 + rnd() * 3.5;
+    var x = L.px + Math.cos(a) * rr, z = L.pz + Math.sin(a) * rr;
+    CRITTERS.push({ x: x, y: groundH(x, z), z: z, yaw: rnd() * TAU, species: r.species, name: r.name,
+                    ph: rnd() * TAU, home: { x: x, z: z }, res: r, hop: r.species !== 'tortoise' });
+  }
+  for (var l = 0; l < LOCS.length; l++) {                      /* and the extras */
+    var L2 = LOCS[l], n = L2.kind === 'farm' ? 7 : L2.kind === 'home' ? 3 : 5;
+    var kinds = L2.kind === 'farm' ? ['sheep','hen','goat','sheep','hen']
+              : L2.kind === 'vineyard' ? ['hen','cat','goose','hen','sheep']
+              : L2.kind === 'airfield' ? ['goose','cat','hen','gull','hen']
+              : L2.kind === 'abbey' ? ['hen','goose','cat','sheep','hen']
+              : ['goose','hen','cat','gull','sheep','hen'];
+    for (var k = 0; k < n; k++) {
+      var ang = rnd() * TAU, rad = L2.r * (0.28 + rnd() * 0.5);
+      var cx = L2.x + Math.cos(ang) * rad, cz = L2.z + Math.sin(ang) * rad;
+      var sp2 = kinds[(rnd() * kinds.length) | 0];
+      CRITTERS.push({ x: cx, y: groundH(cx, cz), z: cz, yaw: rnd() * TAU, species: sp2,
+                      ph: rnd() * TAU, scale: 0.85 + rnd() * 0.3, hop: sp2 !== 'tortoise',
+                      home: { x: cx, z: cz }, wander: true });
+    }
+  }
+}
+/* they potter about, and scatter when you come barrelling through */
+function updateCritters(dt) {
+  for (var i = 0; i < CRITTERS.length; i++) {
+    var c = CRITTERS[i];
+    if (!c.wander) continue;
+    var d = dist2(c.x, c.z, camX, camZ);
+    if (d > 170) continue;
+    var pd = dist2(c.x, c.z, P.x, P.z);
+    if (pd < 9 && !P.flying && Math.abs(P.spd) > 3) {          /* out of the way! */
+      var away = Math.atan2(c.x - P.x, c.z - P.z);
+      c.yaw = away;
+      c.x += Math.sin(away) * 4.2 * dt; c.z += Math.cos(away) * 4.2 * dt;
+    } else {
+      c.t = (c.t || 0) - dt;
+      if (c.t <= 0) { c.t = 2 + Math.random() * 4; c.goal = Math.random() < 0.55 ? null
+        : { x: c.home.x + (Math.random() - 0.5) * 14, z: c.home.z + (Math.random() - 0.5) * 14 }; }
+      if (c.goal) {
+        var gd = dist2(c.x, c.z, c.goal.x, c.goal.z);
+        if (gd < 0.6) c.goal = null;
+        else {
+          var ga = Math.atan2(c.goal.x - c.x, c.goal.z - c.z);
+          c.yaw += wrapAng(ga - c.yaw) * clamp(3 * dt, 0, 1);
+          c.x += Math.sin(c.yaw) * 0.85 * dt; c.z += Math.cos(c.yaw) * 0.85 * dt;
+        }
+      }
+    }
+    if (dist2(c.x, c.z, c.home.x, c.home.z) > 22) {
+      var back = Math.atan2(c.home.x - c.x, c.home.z - c.z);
+      c.yaw += wrapAng(back - c.yaw) * clamp(2 * dt, 0, 1);
+    }
+    c.y = groundH(c.x, c.z);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    11. SHEETS — job boards, workshops, cafés
    ═══════════════════════════════════════════════════════════════════════════ */
 var veil = document.getElementById('veil'), sheetEl = document.getElementById('sheet');
@@ -1942,6 +2327,8 @@ function towOption() {
 }
 function interact() {
   if (titleUp || gameOver) return;
+  var w = nearWanderer();
+  if (w) { wandererSheet(w); return; }
   var L = nearestLoc();
   if (!L) {
     if (P.fuel <= 0.5 && Math.abs(P.spd) < 1) {
@@ -1965,7 +2352,8 @@ function openLocation(L) {
           money += payout; stats.deliveries++;
           stamina = clamp(stamina + 0.04, 0, 1);
           closeSheet();
-          toast('Delivered! +' + money$(payout));
+          var host2 = residentOf(L);
+          toast(host2 ? host2.name + ' signs for it. +' + money$(payout) : 'Delivered! +' + money$(payout));
         } });
     })(drop[i]);
   }
@@ -1984,7 +2372,10 @@ function openLocation(L) {
     var need = Math.ceil(fuelMax() - P.fuel), cost = Math.ceil(need * 0.9);
     opts.push({ t: 'Refuel Aires', right: need > 0 ? money$(-cost) : 'full', costly: true,
       dis: need <= 0 || money < cost,
-      d: need > 0 ? Math.round(P.fuel) + '/' + fuelMax() + ' litres in the tank.' : 'The tank is brimming.',
+      d: (function () { var a = residentOf(L, 'pump');
+            return (a ? a.name + ' works the pump. ' : '') +
+                   (need > 0 ? Math.round(P.fuel) + '/' + fuelMax() + ' litres in the tank.'
+                             : 'The tank is brimming.'); })(),
       fn: function () { money -= cost; P.fuel = fuelMax(); closeSheet(); toast('Tank full.'); } });
     var part = Math.floor(money / 0.9);
     if (need > 0 && money < cost && part >= 3) {
@@ -2015,7 +2406,9 @@ function openLocation(L) {
       dis: rc <= 0 || money < rc, d: 'Hull at ' + Math.round(P.hp) + '%.',
       fn: function () { money -= rc; P.hp = 100; closeSheet(); toast('Good as new. Nearly.'); } });
   }
-  if (hasShop) opts.push({ t: 'Open the workshop', d: 'Engine, tank, wings, gun, cargo rack — and the race engine.',
+  if (hasShop) opts.push({ t: 'Open the workshop',
+    d: (residentOf(L, 'shop') ? residentOf(L, 'shop').name + ' looks Aires over. ' : '') +
+       'Engine, tank, wings, gun, cargo rack — and the race engine.',
     fn: function () { shopSheet(L); } });
   if (hasBed) {
     var bedCost = L.kind === 'home' ? 0 : 35;
@@ -2027,7 +2420,12 @@ function openLocation(L) {
   opts.push({ rule: true });
   opts.push({ t: 'Check the manifest', d: 'What Aires is carrying and where it goes.', fn: manifestSheet });
   opts.push({ t: 'Back to the road', fn: closeSheet });
-  showSheet(L.name, L.blurb + ' &nbsp;·&nbsp; Purse ' + money$(money), opts);
+  var host = residentOf(L);
+  if (host) opts.splice(opts.length - 2, 0,
+    { t: 'Pass the time with ' + host.name, d: 'The ' + host.title + '. Always has something to say.',
+      fn: function () { toast(host.name + ': “' + say(host) + '”'); } });
+  showSheet(L.name, host ? '“' + say(host) + '” &mdash; <b>' + host.name + '</b>, ' + host.title
+                         : L.blurb + ' &nbsp;·&nbsp; Purse ' + money$(money), opts);
 }
 function jobSheet(L) {
   var jobs = boardFor(L), opts = [], wt = cargoWt();
@@ -2167,7 +2565,7 @@ function drawMapInto(g, w, h, big) {
     }
   }
   /* pirates */
-  for (var pi = 0; pi < PIRATES.length; pi++) if (PIRATES[pi].alive && !packFleeing) {
+  for (var pi = 0; pi < PIRATES.length; pi++) if (pirateIntel && PIRATES[pi].alive && !packFleeing) {
     g.fillStyle = 'rgba(60,50,60,.8)';
     g.beginPath(); g.arc(mx(PIRATES[pi].x), mz(PIRATES[pi].z), big ? 4 : 2.5, 0, TAU); g.fill();
   }
@@ -2239,9 +2637,12 @@ function updateHUD(dt) {
     E.money.innerHTML = money + ' ₡';
     E.goalLeft.innerHTML = raceEngine ? 'fitted!' : Math.max(0, RACE_COST - money) + ' ₡';
     E.objective.textContent = objectiveText();
-    var L = nearestLoc();
+    var L = nearestLoc(), w2 = nearWanderer();
     E.badgeLbl.textContent = L ? L.name : (P.flying ? 'In the air' : 'The open road');
-    if (L && !sheetOpen) {
+    if (w2 && !sheetOpen) {
+      E.prompt.style.opacity = 1;
+      E.promptTxt.innerHTML = 'Talk to ' + w2.name;
+    } else if (L && !sheetOpen) {
       E.prompt.style.opacity = 1;
       E.promptTxt.innerHTML = L.name + (deliverablesAt(L).length ? ' — delivery waiting' : '');
     } else E.prompt.style.opacity = 0;
@@ -2328,6 +2729,7 @@ function render() {
   drawTerrain();
   drawScatter();
   drawVillages();
+  drawCritters();
   drawClouds();
   drawBirds();
   for (var i = 0; i < PIRATES.length; i++) if (PIRATES[i].alive) drawPirate(PIRATES[i]);
@@ -2394,6 +2796,7 @@ function frame(now) {
     updatePirates(dt);
     updateShots(dt);
     updateFx(dt);
+    updateCritters(dt);
     if (packAlive <= 0 && PIRATES.length && !packFleeing) packFleeing = true;
   }
   updateCamera(dt);
@@ -2422,6 +2825,8 @@ function init() {
   buildRoads();
   buildVillages();
   buildSkyStuff();
+  buildCritters();
+  spawnWanderers();
   var h = loc('home');
   P.x = h.px + 6; P.z = h.pz - 10; P.y = groundH(P.x, P.z);
   P.yaw = h.face + PI * 0.5;
