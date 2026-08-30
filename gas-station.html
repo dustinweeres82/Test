@@ -72,8 +72,7 @@ var TANK_UI = {x:40,y:360,w:150,h:40};
 // ── Game state ────────────────────────────────────────────────────────────────
 var state = 'start'; // start, playing, shop, daysummary, gameover, paused
 var cash, day, dayTimer, marketPrice, price, reputation;
-var storeStock, storeCap;
-var pumpsUnlocked, attendants, adLevel, hasCashier;
+var pumpsUnlocked, attendants, adLevel;
 var pumps, cars, floaters, particles;
 var spawnTimer, rushUntil, rushTriggeredToday;
 var daySummary = null;
@@ -87,8 +86,7 @@ function newGame(){
   marketPrice = 3.10;
   price = 2.99;
   reputation = 60;
-  storeStock = 25; storeCap = 100;
-  pumpsUnlocked = 2; attendants = 0; adLevel = 0; hasCashier = false;
+  pumpsUnlocked = 2; attendants = 0; adLevel = 0;
   pumps = [];
   for(var i=0;i<4;i++) pumps.push({x:PUMP_X[i],y:PUMP_Y,unlocked:i<pumpsUnlocked,car:null,fueling:false,progress:0,dur:1});
   cars = []; floaters = []; particles = [];
@@ -105,8 +103,7 @@ function addFloat(x,y,text,color){ floaters.push({x:x,y:y,text:text,color:color,
 function pumpUnlockCost(idx){ return idx===2?250:(idx===3?500:0); }
 function attendantCost(){ return 250 + attendants*200; }
 function adCost(){ return 150 + adLevel*150; }
-var CASHIER_COST = 350;
-function dailyWages(){ return attendants*20 + (hasCashier?15:0); }
+function dailyWages(){ return attendants*20; }
 function dailyRent(){ return 40 + pumpsUnlocked*15; }
 
 // ── Spawning & AI ─────────────────────────────────────────────────────────────
@@ -202,21 +199,12 @@ function finishFueling(pumpIdx){
   addFloat(p.x,p.y-60, fmt2(revenue), '#2ecc71');
   reputation = clamp(reputation+1,0,100);
   carsServedTotal++;
-  if(c.wantsSnack && storeStock>0){
-    storeStock--; cash += SNACK_PRICE;
+  if(c.wantsSnack){
+    cash += SNACK_PRICE;
     addFloat(STORE.x+STORE.w/2, STORE.y+20, '+'+fmt2(SNACK_PRICE)+' snack', '#f1c40f');
   }
   p.fueling=false; p.progress=0; p.car=null;
   c.state='leaving';
-}
-
-// ── Store ─────────────────────────────────────────────────────────────────────
-function restock(){
-  var cost = 50;
-  if(storeStock>=storeCap){ return; }
-  if(cash<cost){ addFloat(STORE.x+STORE.w/2,STORE.y-10,'Not enough cash!','#e74c3c'); return; }
-  cash -= cost; storeStock = Math.min(storeCap, storeStock+25);
-  addFloat(STORE.x+STORE.w/2,STORE.y-10,'Restocked!','#2ecc71');
 }
 
 // ── Upgrades ──────────────────────────────────────────────────────────────────
@@ -237,17 +225,10 @@ function buyAd(){
   if(cash<cost) return;
   cash -= cost; adLevel++; reputation = clamp(reputation+15,0,100);
 }
-function buyCashier(){
-  if(hasCashier) return;
-  if(cash<CASHIER_COST) return;
-  cash -= CASHIER_COST; hasCashier = true;
-}
-
 var SHOP_ITEMS = [
   {key:'pump', name:'Unlock Pump', get:function(){return pumpsUnlocked<4?fmt(pumpUnlockCost(pumpsUnlocked)):'MAX';}, desc:function(){return 'Pumps: '+pumpsUnlocked+'/4';}, buy:buyPump, maxed:function(){return pumpsUnlocked>=4;}},
   {key:'att', name:'Hire Attendant', get:function(){return fmt(attendantCost());}, desc:function(){return 'Owned: '+attendants+' (auto-fuels cars, wage $20/day ea)';}, buy:buyAttendant, maxed:function(){return false;}},
-  {key:'ad', name:'Advertise', get:function(){return reputation<100?fmt(adCost()):'MAX';}, desc:function(){return 'Reputation: '+Math.round(reputation)+'/100 (+15)';}, buy:buyAd, maxed:function(){return reputation>=100;}},
-  {key:'cashier', name:'Hire Cashier', get:function(){return hasCashier?'OWNED':fmt(CASHIER_COST);}, desc:function(){return 'Auto-restocks store, wage $15/day';}, buy:buyCashier, maxed:function(){return hasCashier;}}
+  {key:'ad', name:'Advertise', get:function(){return reputation<100?fmt(adCost()):'MAX';}, desc:function(){return 'Reputation: '+Math.round(reputation)+'/100 (+15)';}, buy:buyAd, maxed:function(){return reputation>=100;}}
 ];
 
 // ── Day cycle ─────────────────────────────────────────────────────────────────
@@ -270,7 +251,6 @@ function nextDay(){
   rushUntil = 0;
   carsServedTotal = 0;
   marketPrice = clamp(marketPrice + (Math.random()-0.5)*0.3, 2.4, 4.3);
-  if(hasCashier && storeStock<=0 && cash>=50){ cash-=50; storeStock=25; }
   state = 'playing';
 }
 
@@ -289,8 +269,6 @@ function update(dt){
   if(spawnTimer<=0){ spawnCar(); spawnTimer = effectiveSpawnInterval()*(0.7+Math.random()*0.6); }
 
   updateCars(dt);
-
-  if(hasCashier && storeStock<=0 && cash>=50){ cash-=50; storeStock=25; }
 
   for(var i=floaters.length-1;i>=0;i--){ floaters[i].y-=30*dt; floaters[i].life-=dt; if(floaters[i].life<=0) floaters.splice(i,1); }
 
@@ -364,7 +342,7 @@ function drawStore(){
   ctx.fillStyle='#fff'; ctx.font='bold 14px sans-serif'; ctx.textAlign='center';
   ctx.fillText('STORE', STORE.x+STORE.w/2, STORE.y+24);
   ctx.font='12px sans-serif';
-  ctx.fillText('Snacks: '+storeStock+'/'+storeCap, STORE.x+STORE.w/2, STORE.y+44);
+  ctx.fillText('🍫 Unlimited Snacks', STORE.x+STORE.w/2, STORE.y+44);
 }
 
 function drawTank(){
@@ -456,14 +434,13 @@ function drawHUD(){
 
   // bottom bar
   ctx.fillStyle='rgba(20,20,25,0.82)'; ctx.fillRect(0,VH-56,VW,56);
-  BTN.restock = {x:20,y:VH-46,w:150,h:36};
-  BTN.shop = {x:VW-150,y:VH-46,w:130,h:36};
+  BTN.shop = {x:VW/2-65,y:VH-46,w:130,h:36};
 
-  drawBtn(BTN.restock, 'Restock +25 ($50)', storeStock<storeCap && cash>=50);
   drawBtn(BTN.shop, '🛒 Upgrades Shop', true);
 
   ctx.fillStyle='rgba(255,255,255,0.6)'; ctx.font='11px sans-serif';
-  ctx.fillText('Attendants: '+attendants+'   Pumps: '+pumpsUnlocked+'/4'+(hasCashier?'   Cashier ✓':''), VW/2, VH-8);
+  ctx.textAlign='left';
+  ctx.fillText('Attendants: '+attendants+'   Pumps: '+pumpsUnlocked+'/4', 20, VH-8);
 }
 
 function drawBtn(b,label,enabled){
@@ -562,7 +539,6 @@ function ptr(cx,cy){
 
   if(BTN.priceDown && inB(p,BTN.priceDown)){ price = clamp(price-0.10, WHOLESALE+0.10, 4.50); return; }
   if(BTN.priceUp && inB(p,BTN.priceUp)){ price = clamp(price+0.10, WHOLESALE+0.10, 4.50); return; }
-  if(BTN.restock && inB(p,BTN.restock)){ restock(); return; }
   if(BTN.shop && inB(p,BTN.shop)){ state='shop'; return; }
 
   // click a parked pump/car to start fueling manually
