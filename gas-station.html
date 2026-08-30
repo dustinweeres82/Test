@@ -8,46 +8,183 @@
 <title>Fill 'Er Up! Gas Station Tycoon</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font-family: 'Trebuchet MS', 'Segoe UI', sans-serif; }
-  canvas { display: block; position: fixed; top: 0; left: 0; width: 100%; height: 100%; touch-action: none; }
-  #rotate {
-    display: none;
-    position: fixed; inset: 0; background: #1a1a1a; color: #f0ece4;
-    flex-direction: column; align-items: center; justify-content: center;
-    font-size: 1.1rem; letter-spacing: 2px; z-index: 10;
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0e14; font-family: 'Trebuchet MS', 'Segoe UI', sans-serif; }
+  #three-canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
+
+  #hud-top {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 5;
+    display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+    background: rgba(15,18,25,0.82); backdrop-filter: blur(2px);
+    padding: 10px 16px; color: #ecf0f1; font-size: 14px;
   }
-  #rotate span { font-size: 2.5rem; margin-bottom: 16px; }
-  @media (orientation: portrait) and (max-width: 600px) { #rotate { display: flex; } }
+  #cash { color: #2ecc71; font-weight: bold; font-size: 20px; min-width: 70px; font-variant-numeric: tabular-nums; }
+  .dayblock { display: flex; flex-direction: column; gap: 3px; min-width: 90px; }
+  .daybar { width: 90px; height: 7px; background: #333; border-radius: 4px; overflow: hidden; }
+  .daybar > div { height: 100%; background: #f1c40f; width: 0%; transition: width 0.2s linear; }
+  #stars { display:flex; gap: 2px; font-size: 15px; letter-spacing: 1px; }
+  .star-dim { opacity: 0.25; }
+  .star-lit { color: #f1c40f; }
+  #market-served { display:flex; flex-direction:column; gap:2px; font-size:12px; color:#bdc3c7; }
+  #price-ctrl { display:flex; align-items:center; gap: 8px; margin-left: auto; }
+  #price-ctrl button {
+    width: 30px; height: 30px; border-radius: 6px; border: none; background: #34495e; color: #fff;
+    font-size: 18px; font-weight: bold; cursor: pointer; line-height: 1;
+  }
+  #price-ctrl button:hover { background: #3d566e; }
+  #price-label { color: #f1c40f; font-weight: bold; font-size: 15px; min-width: 130px; text-align: center; font-variant-numeric: tabular-nums; }
+
+  #hud-bottom {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 5;
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    background: rgba(15,18,25,0.82); padding: 10px 16px; color: rgba(255,255,255,0.6); font-size: 12px;
+  }
+  #fleet-info { position: absolute; left: 16px; }
+  .btn {
+    background: #2c7a4b; color: #fff; border: none; border-radius: 8px;
+    padding: 10px 20px; font-size: 14px; font-weight: bold; cursor: pointer;
+    font-family: inherit;
+  }
+  .btn:hover { background: #34925a; }
+  .btn:disabled { background: #555; color: #999; cursor: not-allowed; }
+  .btn.big { padding: 14px 32px; font-size: 16px; }
+
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 10; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal-backdrop[hidden] { display: none; }
+  .modal {
+    background: #1c2938; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px; padding: 28px 32px; max-width: 480px; width: 100%;
+    color: #ecf0f1; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .modal h1 { font-size: 30px; margin-bottom: 12px; text-wrap: balance; }
+  .modal p { font-size: 14px; color: #bdc3c7; line-height: 1.5; margin-bottom: 8px; }
+  .modal .hi { color: #f1c40f; font-size: 13px; margin: 10px 0 18px; }
+
+  #shop-modal-inner { max-width: 460px; position: relative; }
+  #shop-modal-inner .close-x {
+    position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 8px;
+    background: #c0392b; color: #fff; border: none; font-weight: bold; font-size: 15px; cursor: pointer;
+  }
+  .shop-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: #263646; border-radius: 8px; padding: 12px 14px; margin-top: 10px; text-align: left;
+  }
+  .shop-row.maxed { background: #22262c; opacity: 0.65; }
+  .shop-row-name { font-weight: bold; font-size: 15px; }
+  .shop-row-desc { font-size: 11px; color: #9fb0bf; margin-top: 3px; }
+  .shop-row button {
+    background: #2c7a4b; color: #fff; border: none; border-radius: 6px; padding: 8px 14px;
+    font-weight: bold; font-size: 13px; cursor: pointer; white-space: nowrap;
+  }
+  .shop-row button:disabled { background: #444; color: #888; cursor: not-allowed; }
+
+  .stat-line { display: flex; justify-content: space-between; font-size: 14px; margin: 6px 0; color: #dfe6ec; }
+  .stat-line.total { color: #2ecc71; font-weight: bold; font-size: 17px; margin-top: 14px; }
+
+  #floaters, #labels { position: fixed; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
+  .floater { position: absolute; font-weight: bold; font-size: 15px; transform: translate(-50%,-100%); white-space: nowrap; text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+  .worldlabel { position: absolute; transform: translate(-50%,-100%); white-space: nowrap; font-size: 12px; font-weight: bold; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.8); display: none; }
+  .worldlabel.show { display: block; }
+  .worldlabel.tag {
+    background: rgba(15,18,25,0.72); padding: 3px 8px; border-radius: 6px;
+  }
+
+  #rush-banner {
+    position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+    background: rgba(243,156,18,0.92); color: #201400; font-weight: bold; font-size: 15px;
+    padding: 8px 22px; border-radius: 8px; z-index: 6; opacity: 0; transition: opacity 0.4s;
+    pointer-events: none;
+  }
+  #rush-banner.show { opacity: 1; }
+
+  #hint { position: fixed; bottom: 62px; left: 50%; transform: translateX(-50%); z-index: 5;
+    color: rgba(255,255,255,0.55); font-size: 11px; pointer-events: none; }
+
+  @media (max-width: 640px) {
+    #hud-top { gap: 10px; font-size: 12px; padding: 8px 10px; }
+    #cash { font-size: 16px; min-width: 55px; }
+    #market-served { display: none; }
+    .dayblock { min-width: 60px; }
+    .daybar { width: 60px; }
+    #price-label { min-width: 100px; font-size: 13px; }
+    #fleet-info { display: none; }
+  }
 </style>
 </head>
 <body>
-<canvas id="canvas"></canvas>
-<div id="rotate"><span>&#8635;</span>Rotate for best experience</div>
+<canvas id="three-canvas"></canvas>
+<div id="labels"></div>
+<div id="floaters"></div>
+<div id="rush-banner">🚗 RUSH HOUR!</div>
+<div id="hint">Tap a car at the pump to fuel it · drag to look around · scroll to zoom</div>
+
+<div id="hud-top">
+  <div id="cash">$300</div>
+  <div class="dayblock">
+    <div id="day-label">Day 1</div>
+    <div class="daybar"><div id="day-progress"></div></div>
+  </div>
+  <div id="stars"></div>
+  <div id="market-served">
+    <div id="market-label">Market: $3.10/gal</div>
+    <div id="served-label">Served today: 0</div>
+  </div>
+  <div id="price-ctrl">
+    <button id="price-down">-</button>
+    <div id="price-label">Your price: $2.99/gal</div>
+    <button id="price-up">+</button>
+  </div>
+</div>
+
+<div id="hud-bottom">
+  <div id="fleet-info">Attendants: 0 &nbsp; Pumps: 2/4</div>
+  <button class="btn" id="shop-open-btn">🛒 Upgrades Shop</button>
+</div>
+
+<div class="modal-backdrop" id="start-modal">
+  <div class="modal">
+    <h1>Fill 'Er Up!</h1>
+    <p>Run your own gas station in full 3D. Set your price, fuel up the cars that pull in, and keep the lot busy without going broke.</p>
+    <p>Tap a parked car to fuel it (or hire attendants to automate it). Drag to orbit the camera, scroll to zoom.</p>
+    <div class="hi" id="start-hiscore">Best day survived: 0 &nbsp; Best cash: $0</div>
+    <button class="btn big" id="start-btn">START GAME</button>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="shop-modal" hidden>
+  <div class="modal" id="shop-modal-inner">
+    <button class="close-x" id="shop-close-btn">X</button>
+    <h1 style="font-size:24px;">Upgrades Shop</h1>
+    <div id="shop-rows"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="daysummary-modal" hidden>
+  <div class="modal">
+    <h1 id="ds-title" style="font-size:24px;">Day 1 Complete</h1>
+    <div class="stat-line"><span>Cars served</span><span id="ds-served">0</span></div>
+    <div class="stat-line"><span>Rent</span><span id="ds-rent">$0</span></div>
+    <div class="stat-line"><span>Wages</span><span id="ds-wages">$0</span></div>
+    <div class="stat-line total"><span>Cash on hand</span><span id="ds-cash">$0</span></div>
+    <p style="margin-top:14px;color:#f1c40f;">Market price will shift when the next day starts</p>
+    <button class="btn big" id="ds-next-btn" style="margin-top:10px;">Start Day 2</button>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="gameover-modal" hidden>
+  <div class="modal">
+    <h1 style="color:#e74c3c;">BANKRUPT!</h1>
+    <p id="go-days">You survived 1 day.</p>
+    <div class="hi" id="go-hiscore">Best day survived: 0 &nbsp; Best cash: $0</div>
+    <button class="btn big" id="go-restart-btn">TRY AGAIN</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-var canvas = document.getElementById('canvas');
-var ctx = canvas.getContext('2d');
-
-// ── Viewport scaling ──────────────────────────────────────────────────────────
-var VW = 960, VH = 540;
-var scale = 1, offX = 0, offY = 0;
-
-function resize() {
-  var dpr = window.devicePixelRatio || 1;
-  var vw = window.innerWidth, vh = window.innerHeight;
-  canvas.width  = vw * dpr;
-  canvas.height = vh * dpr;
-  canvas.style.width  = vw + 'px';
-  canvas.style.height = vh + 'px';
-  scale = Math.min(vw / VW, vh / VH) * dpr;
-  offX  = (canvas.width  - VW * scale) / 2;
-  offY  = (canvas.height - VH * scale) / 2;
-}
-window.addEventListener('resize', resize);
-resize();
-
-function cpos(cx,cy){ var dpr=window.devicePixelRatio||1; return{x:((cx*dpr)-offX)/scale, y:((cy*dpr)-offY)/scale}; }
-function inB(p,b){ return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h; }
-function rr(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
 function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
 function fmt(n){ return (n<0?'-$':'$')+Math.abs(Math.round(n)).toLocaleString(); }
 function fmt2(n){ return '$'+n.toFixed(2); }
@@ -58,22 +195,22 @@ var hi = {bestDay:0,bestCash:0};
 try{ var s=localStorage.getItem(SAVE_KEY); if(s) hi=JSON.parse(s); }catch(e){}
 function saveHi(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(hi)); }catch(e){} }
 
-// ── Game constants ────────────────────────────────────────────────────────────
+// ── Game constants (logical layout units, mapped to 3D world space) ─────────
 var WHOLESALE = 2.20;
-var DAY_LEN = 100;          // seconds per in-game day
+var DAY_LEN = 100;
 var SNACK_PRICE = 3.50;
 var ROAD_Y = 300;
 var ENTRY_X = 780;
 var PUMP_X = [420,520,620,720];
 var PUMP_Y = 360;
 var STORE = {x:40,y:190,w:150,h:150};
-var TANK_UI = {x:40,y:360,w:150,h:40};
+var VW = 960;
 
 // ── Game state ────────────────────────────────────────────────────────────────
-var state = 'start'; // start, playing, shop, daysummary, gameover, paused
+var state = 'start';
 var cash, day, dayTimer, marketPrice, price, reputation;
 var pumpsUnlocked, attendants, adLevel;
-var pumps, cars, floaters, particles;
+var pumps, cars, floaters;
 var spawnTimer, rushUntil, rushTriggeredToday;
 var daySummary = null;
 var carSeq = 0;
@@ -89,15 +226,18 @@ function newGame(){
   pumpsUnlocked = 2; attendants = 0; adLevel = 0;
   pumps = [];
   for(var i=0;i<4;i++) pumps.push({x:PUMP_X[i],y:PUMP_Y,unlocked:i<pumpsUnlocked,car:null,fueling:false,progress:0,dur:1});
-  cars = []; floaters = []; particles = [];
+  cars = []; floaters = [];
   spawnTimer = 2;
   rushUntil = 0; rushTriggeredToday = false;
   carsServedTotal = 0;
   daySummary = null;
+  resetCarMeshes();
+  syncPumpLocks();
 }
-newGame();
 
-function addFloat(x,y,text,color){ floaters.push({x:x,y:y,text:text,color:color,life:1.2}); }
+function addFloat(x,y,text,color,h){
+  floaters.push({wp:worldPos(x,y,h||1.5), text:text, color:color, life:1.2, total:1.2, el:null});
+}
 
 // ── Economy helpers ───────────────────────────────────────────────────────────
 function pumpUnlockCost(idx){ return idx===2?250:(idx===3?500:0); }
@@ -118,11 +258,11 @@ function effectiveSpawnInterval(){
 
 function spawnCar(){
   carSeq++;
-  var hue = [ '#e74c3c','#3498db','#2ecc71','#f1c40f','#9b59b6','#e67e22','#1abc9c','#95a5a6' ][carSeq%8];
+  var hue = [ 0xe74c3c,0x3498db,0x2ecc71,0xf1c40f,0x9b59b6,0xe67e22,0x1abc9c,0x95a5a6 ][carSeq%8];
   cars.push({
     id:carSeq, x:VW+40, y:ROAD_Y, state:'approach', color:hue,
     targetPump:-1, patience:18, wantsSnack: Math.random()<0.45,
-    gallons: 8+Math.random()*8, queueSlot:0
+    gallons: 8+Math.random()*8
   });
 }
 
@@ -132,7 +272,6 @@ function freePumpIndex(){
 }
 
 function updateCars(dt){
-  // approaching cars move left toward entry
   var queued = [];
   for(var i=0;i<cars.length;i++){
     var c = cars[i];
@@ -165,7 +304,6 @@ function updateCars(dt){
       if(c.x < -60){ cars.splice(i,1); i--; continue; }
     }
   }
-  // queue ordering: sort by arrival (id) then place slots behind entry
   queued.sort(function(a,b){return a.id-b.id;});
   for(var q=0;q<queued.length;q++){
     var c2=queued[q];
@@ -173,7 +311,7 @@ function updateCars(dt){
     c2.x += (targetX-c2.x)*Math.min(1,6*dt);
     c2.patience -= dt;
     if(c2.patience<=0){
-      addFloat(c2.x,c2.y-20,'Left in a huff 😠','#e74c3c');
+      addFloat(c2.x,c2.y,'Left in a huff 😠','#e74c3c');
       reputation = clamp(reputation-4,0,100);
       var idx = cars.indexOf(c2);
       if(idx>=0) cars.splice(idx,1);
@@ -196,12 +334,12 @@ function finishFueling(pumpIdx){
   var gal = c.gallons;
   var revenue = gal*price;
   cash += revenue;
-  addFloat(p.x,p.y-60, fmt2(revenue), '#2ecc71');
+  addFloat(p.x,p.y-70, fmt2(revenue), '#2ecc71');
   reputation = clamp(reputation+1,0,100);
   carsServedTotal++;
   if(c.wantsSnack){
     cash += SNACK_PRICE;
-    addFloat(STORE.x+STORE.w/2, STORE.y+20, '+'+fmt2(SNACK_PRICE)+' snack', '#f1c40f');
+    addFloat(STORE.x+STORE.w/2, STORE.y+40, '+'+fmt2(SNACK_PRICE)+' snack', '#f1c40f');
   }
   p.fueling=false; p.progress=0; p.car=null;
   c.state='leaving';
@@ -213,6 +351,7 @@ function buyPump(){
   var cost = pumpUnlockCost(pumpsUnlocked);
   if(cash<cost) return;
   cash -= cost; pumps[pumpsUnlocked].unlocked = true; pumpsUnlocked++;
+  syncPumpLocks();
 }
 function buyAttendant(){
   var cost = attendantCost();
@@ -233,7 +372,6 @@ var SHOP_ITEMS = [
 
 // ── Day cycle ─────────────────────────────────────────────────────────────────
 function endDay(){
-  var revenue = 0; // already added live; just report expenses now
   var wages = dailyWages(), rent = dailyRent();
   var expenses = wages+rent;
   cash -= expenses;
@@ -241,7 +379,8 @@ function endDay(){
   hi.bestDay = Math.max(hi.bestDay, day);
   hi.bestCash = Math.max(hi.bestCash, cash);
   saveHi();
-  state = 'daysummary';
+  showDaySummary();
+  setState('daysummary');
 }
 
 function nextDay(){
@@ -251,11 +390,10 @@ function nextDay(){
   rushUntil = 0;
   carsServedTotal = 0;
   marketPrice = clamp(marketPrice + (Math.random()-0.5)*0.3, 2.4, 4.3);
-  state = 'playing';
+  setState('playing');
 }
 
-// ── Main update ───────────────────────────────────────────────────────────────
-var last = 0;
+// ── Main update (game economy/AI tick — unrelated to rendering) ─────────────
 function update(dt){
   if(state!=='playing') return;
   dayTimer += dt;
@@ -263,304 +401,529 @@ function update(dt){
 
   if(!rushTriggeredToday && dayTimer > 30 && Math.random()<0.004){
     rushTriggeredToday = true; rushUntil = dayTimer + 18;
-    addFloat(VW/2, 90, 'RUSH HOUR!', '#f39c12');
+    showBanner();
   }
 
   if(spawnTimer<=0){ spawnCar(); spawnTimer = effectiveSpawnInterval()*(0.7+Math.random()*0.6); }
 
   updateCars(dt);
 
-  for(var i=floaters.length-1;i>=0;i--){ floaters[i].y-=30*dt; floaters[i].life-=dt; if(floaters[i].life<=0) floaters.splice(i,1); }
-
   if(cash < -150){
     hi.bestDay = Math.max(hi.bestDay, day); saveHi();
-    state = 'gameover';
+    showGameOver();
+    setState('gameover');
     return;
   }
 
   if(dayTimer>=DAY_LEN){ endDay(); }
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
-function skyColor(){
-  var t = dayTimer/DAY_LEN;
-  if(t<0.5){ var k=t/0.5; return lerpColor('#7ec8ff','#ffd27f',Math.max(0,k*2-1)); }
-  else { var k2=(t-0.5)/0.5; if(k2<0.6) return lerpColor('#ffd27f','#2c3e6e',k2/0.6); return lerpColor('#2c3e6e','#111a33',(k2-0.6)/0.4); }
+// ── 3D world setup ────────────────────────────────────────────────────────────
+var WORLD_SCALE = 0.045;
+function worldPos(x,y,h){ return new THREE.Vector3((x-VW/2)*WORLD_SCALE, h||0, (y-ROAD_Y)*WORLD_SCALE); }
+
+var canvasEl = document.getElementById('three-canvas');
+var renderer = new THREE.WebGLRenderer({canvas:canvasEl, antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+var scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x87ceeb, 26, 95);
+
+var camera = new THREE.PerspectiveCamera(42, window.innerWidth/window.innerHeight, 0.1, 200);
+camera.position.set(-4, 15, 27);
+
+var controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 12;
+controls.maxDistance = 60;
+controls.maxPolarAngle = Math.PI*0.49;
+controls.minPolarAngle = Math.PI*0.12;
+controls.enablePan = false;
+controls.target.set(2, 1, 1);
+controls.update();
+
+function onResize(){
+  var aspect = window.innerWidth/window.innerHeight;
+  camera.aspect = aspect;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  // pull the camera back on narrow/portrait screens so the whole station stays framed
+  var offset = camera.position.clone().sub(controls.target);
+  var baseDist = 30.3;
+  var desired = baseDist * (aspect<1 ? clamp(1/aspect, 1, 1.9) : 1);
+  offset.setLength(desired);
+  camera.position.copy(controls.target).add(offset);
+  controls.update();
 }
-function lerpColor(a,b,t){
-  t=clamp(t,0,1);
-  var ah=parseInt(a.slice(1),16), bh=parseInt(b.slice(1),16);
-  var ar=(ah>>16)&255, ag=(ah>>8)&255, ab=ah&255;
-  var br=(bh>>16)&255, bg=(bh>>8)&255, bb=bh&255;
-  var r=Math.round(ar+(br-ar)*t), g=Math.round(ag+(bg-ag)*t), bl=Math.round(ab+(bb-ab)*t);
-  return 'rgb('+r+','+g+','+bl+')';
+window.addEventListener('resize', onResize);
+onResize();
+
+var ambient = new THREE.AmbientLight(0xffffff, 0.55);
+scene.add(ambient);
+var sun = new THREE.DirectionalLight(0xffffff, 1.1);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024,1024);
+sun.shadow.camera.left = -34; sun.shadow.camera.right = 34;
+sun.shadow.camera.top = 20; sun.shadow.camera.bottom = -16;
+sun.shadow.camera.near = 1; sun.shadow.camera.far = 70;
+sun.shadow.bias = -0.0015;
+scene.add(sun);
+scene.add(sun.target);
+
+// ground
+var grass = new THREE.Mesh(new THREE.PlaneGeometry(110,110), new THREE.MeshStandardMaterial({color:0x4f7d33, roughness:1}));
+grass.rotation.x = -Math.PI/2; grass.position.y = -0.03; grass.receiveShadow = true;
+scene.add(grass);
+
+var road = new THREE.Mesh(new THREE.PlaneGeometry(100,3.4), new THREE.MeshStandardMaterial({color:0x3a3a3d, roughness:0.9}));
+road.rotation.x = -Math.PI/2; road.position.set(0,0,0); road.receiveShadow = true;
+scene.add(road);
+
+for(var dx=-22; dx<=24; dx+=2.3){
+  var dash = new THREE.Mesh(new THREE.BoxGeometry(0.9,0.03,0.16), new THREE.MeshStandardMaterial({color:0xf2f2f2}));
+  dash.position.set(dx, 0.025, 0);
+  scene.add(dash);
 }
 
-function draw(){
-  ctx.save();
-  ctx.setTransform(scale,0,0,scale,offX,offY);
-  ctx.clearRect(0,0,VW,VH);
+var LOT = {x:20,y:190,w:VW-40,h:240};
+var lotCenter = worldPos(LOT.x+LOT.w/2, LOT.y+LOT.h/2);
+var lot = new THREE.Mesh(new THREE.BoxGeometry(LOT.w*WORLD_SCALE, 0.08, LOT.h*WORLD_SCALE), new THREE.MeshStandardMaterial({color:0x828282, roughness:0.95}));
+lot.position.set(lotCenter.x, 0.04, lotCenter.z);
+lot.receiveShadow = true;
+scene.add(lot);
 
-  // sky/ground
-  ctx.fillStyle = state==='playing'||state==='shop'||state==='daysummary' ? skyColor() : '#2c3e6e';
-  ctx.fillRect(0,0,VW,VH);
-  ctx.fillStyle = '#5b8a3a';
-  ctx.fillRect(0,ROAD_Y-40,VW,VH-(ROAD_Y-40));
-  ctx.fillStyle = '#444';
-  ctx.fillRect(0,ROAD_Y-10,VW,60);
-  ctx.strokeStyle='rgba(255,255,255,0.5)'; ctx.setLineDash([18,14]); ctx.lineWidth=3;
-  ctx.beginPath(); ctx.moveTo(0,ROAD_Y+20); ctx.lineTo(VW,ROAD_Y+20); ctx.stroke(); ctx.setLineDash([]);
-  ctx.fillStyle = '#7d7d7d';
-  rr(20,190,VW-40,240,10); ctx.fill();
+// store building
+var storeCenter = worldPos(STORE.x+STORE.w/2, STORE.y+STORE.h/2);
+var storeGroup = new THREE.Group();
+storeGroup.position.set(storeCenter.x, 0, storeCenter.z);
+var STORE_SIZE = STORE.w*WORLD_SCALE;
+var walls = new THREE.Mesh(new THREE.BoxGeometry(STORE_SIZE,3.2,STORE_SIZE), new THREE.MeshStandardMaterial({color:0xa05a2c, roughness:0.85}));
+walls.position.y = 1.6; walls.castShadow = true; walls.receiveShadow = true;
+storeGroup.add(walls);
+var roof = new THREE.Mesh(new THREE.BoxGeometry(STORE_SIZE+0.6,0.35,STORE_SIZE+0.6), new THREE.MeshStandardMaterial({color:0x5c3018, roughness:0.8}));
+roof.position.y = 3.375; roof.castShadow = true;
+storeGroup.add(roof);
+var door = new THREE.Mesh(new THREE.BoxGeometry(1.1,1.9,0.12), new THREE.MeshStandardMaterial({color:0x1c2c3a}));
+door.position.set(0, 0.95, STORE_SIZE/2+0.06);
+storeGroup.add(door);
+var winMat = new THREE.MeshStandardMaterial({color:0xfff3c0, emissive:0xffdd88, emissiveIntensity:0});
+var win1 = new THREE.Mesh(new THREE.PlaneGeometry(1.3,1.0), winMat);
+win1.position.set(-1.9, 1.5, STORE_SIZE/2+0.07);
+storeGroup.add(win1);
+var win2 = win1.clone(); win2.position.x = 1.9;
+storeGroup.add(win2);
+scene.add(storeGroup);
+var storeLabelAnchor = new THREE.Vector3(storeCenter.x, 4.3, storeCenter.z);
 
-  drawStore();
-  drawTank();
-  for(var i=0;i<pumps.length;i++) drawPump(pumps[i],i);
-  for(var i2=0;i2<cars.length;i2++) drawCar(cars[i2]);
-  for(var f=0;f<floaters.length;f++){
-    var fl=floaters[f];
-    ctx.globalAlpha = clamp(fl.life,0,1);
-    ctx.fillStyle=fl.color; ctx.font='bold 16px sans-serif'; ctx.textAlign='center';
-    ctx.fillText(fl.text, fl.x, fl.y);
-    ctx.globalAlpha=1;
+// price sign
+var signLogical = {x:900, y:265};
+var signWorld = worldPos(signLogical.x, signLogical.y);
+var signGroup = new THREE.Group();
+signGroup.position.set(signWorld.x, 0, signWorld.z);
+var pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,3.0,10), new THREE.MeshStandardMaterial({color:0xcccccc, metalness:0.4, roughness:0.5}));
+pole.position.y = 1.5; pole.castShadow = true;
+signGroup.add(pole);
+var signHead = new THREE.Mesh(new THREE.BoxGeometry(2.1,1.05,0.15), new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.4}));
+signHead.position.y = 3.25; signHead.castShadow = true;
+signGroup.add(signHead);
+scene.add(signGroup);
+var signLabelAnchor = new THREE.Vector3(signWorld.x, 4.05, signWorld.z);
+
+// canopy over pumps
+var pumpWorldX = PUMP_X.map(function(px){ return worldPos(px,PUMP_Y).x; });
+var pumpZ = worldPos(PUMP_X[0],PUMP_Y).z;
+var canopyMinX = Math.min.apply(null,pumpWorldX), canopyMaxX = Math.max.apply(null,pumpWorldX);
+var canopyW = (canopyMaxX-canopyMinX) + 3.6;
+var canopyCenterX = (canopyMinX+canopyMaxX)/2;
+var canopy = new THREE.Mesh(new THREE.BoxGeometry(canopyW,0.28,2.6), new THREE.MeshStandardMaterial({color:0xd94b3d, roughness:0.6}));
+canopy.position.set(canopyCenterX, 3.5, pumpZ);
+canopy.castShadow = true; canopy.receiveShadow = true;
+scene.add(canopy);
+var canopyLights = [];
+for(var pi0=0; pi0<4; pi0++){
+  var poleGeo = new THREE.CylinderGeometry(0.07,0.07,3.5,8);
+  var poleMat = new THREE.MeshStandardMaterial({color:0xeeeeee, roughness:0.5});
+  var cpole = new THREE.Mesh(poleGeo, poleMat);
+  cpole.position.set(pumpWorldX[pi0], 1.75, pumpZ);
+  cpole.castShadow = true;
+  scene.add(cpole);
+  var lightBulb = new THREE.PointLight(0xfff3cc, 0, 6, 2);
+  lightBulb.position.set(pumpWorldX[pi0], 3.3, pumpZ);
+  scene.add(lightBulb);
+  canopyLights.push(lightBulb);
+}
+
+// pumps
+var pumpMeshes = [];
+var raycastTargets = [];
+for(var pIdx=0; pIdx<4; pIdx++){
+  var pw = worldPos(PUMP_X[pIdx], PUMP_Y);
+  var group = new THREE.Group();
+  group.position.set(pw.x, 0, pw.z);
+  scene.add(group);
+
+  var island = new THREE.Mesh(new THREE.BoxGeometry(1.6,0.15,1.35), new THREE.MeshStandardMaterial({color:0xd8d8d8, roughness:0.9}));
+  island.position.y = 0.075; island.receiveShadow = true;
+  group.add(island);
+
+  var unlockedParts = new THREE.Group();
+  var body = new THREE.Mesh(new THREE.BoxGeometry(0.7,1.5,0.5), new THREE.MeshStandardMaterial({color:0xc0392b, roughness:0.55}));
+  body.position.y = 0.15+0.75; body.castShadow = true;
+  unlockedParts.add(body);
+  var head = new THREE.Mesh(new THREE.BoxGeometry(0.56,0.4,0.2), new THREE.MeshStandardMaterial({color:0xf5f5f5, roughness:0.4}));
+  head.position.y = 0.15+1.5+0.12;
+  unlockedParts.add(head);
+  var nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.045,0.045,0.5,8), new THREE.MeshStandardMaterial({color:0x222222}));
+  nozzle.position.set(0.42, 1.05, 0.15); nozzle.rotation.z = 0.5;
+  unlockedParts.add(nozzle);
+  group.add(unlockedParts);
+
+  var barBg = new THREE.Mesh(new THREE.BoxGeometry(1.0,0.12,0.05), new THREE.MeshStandardMaterial({color:0x222222}));
+  barBg.position.set(0, 2.15, 0.28);
+  group.add(barBg);
+  var barFill = new THREE.Mesh(new THREE.BoxGeometry(1.0,0.12,0.06), new THREE.MeshStandardMaterial({color:0x2ecc71, emissive:0x1c7a44, emissiveIntensity:0.4}));
+  barFill.position.set(0, 2.15, 0.29);
+  barFill.visible = false;
+  group.add(barFill);
+
+  var lockedPlaceholder = new THREE.Mesh(new THREE.BoxGeometry(0.7,1.0,0.6), new THREE.MeshStandardMaterial({color:0x555555, transparent:true, opacity:0.55, roughness:1}));
+  lockedPlaceholder.position.y = 0.65;
+  group.add(lockedPlaceholder);
+
+  var hitBox = new THREE.Mesh(new THREE.BoxGeometry(1.8,3.2,2.2), new THREE.MeshBasicMaterial({visible:false}));
+  hitBox.position.y = 1.4;
+  hitBox.userData.pumpIndex = pIdx;
+  group.add(hitBox);
+  raycastTargets.push(hitBox);
+
+  pumpMeshes.push({group:group, unlockedParts:unlockedParts, lockedPlaceholder:lockedPlaceholder, barFill:barFill, labelAnchor:new THREE.Vector3(pw.x,2.6,pw.z)});
+}
+
+function syncPumpLocks(){
+  for(var i=0;i<4;i++){
+    var unlocked = pumps[i].unlocked;
+    pumpMeshes[i].unlockedParts.visible = unlocked;
+    pumpMeshes[i].lockedPlaceholder.visible = !unlocked;
   }
-
-  drawHUD();
-
-  if(state==='start') drawStart();
-  if(state==='shop') drawShop();
-  if(state==='daysummary') drawDaySummary();
-  if(state==='gameover') drawGameOver();
-
-  ctx.restore();
 }
 
-function drawStore(){
-  ctx.fillStyle='#a05a2c'; rr(STORE.x,STORE.y,STORE.w,STORE.h,6); ctx.fill();
-  ctx.fillStyle='#c97a3d'; rr(STORE.x+8,STORE.y+8,STORE.w-16,STORE.h-40,4); ctx.fill();
-  ctx.fillStyle='#2c3e50'; ctx.fillRect(STORE.x+STORE.w/2-16,STORE.y+STORE.h-46,32,46);
-  ctx.fillStyle='#fff'; ctx.font='bold 14px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('STORE', STORE.x+STORE.w/2, STORE.y+24);
-  ctx.font='12px sans-serif';
-  ctx.fillText('🍫 Unlimited Snacks', STORE.x+STORE.w/2, STORE.y+44);
+// ── Cars: 3D mesh pool keyed by car id ───────────────────────────────────────
+var carMeshes = {}; // id -> {group, wheels}
+function createCarMesh(colorHex){
+  var g = new THREE.Group();
+  var wheelR = 0.28;
+  var body = new THREE.Mesh(new THREE.BoxGeometry(1.9,0.55,0.95), new THREE.MeshStandardMaterial({color:colorHex, roughness:0.35, metalness:0.25}));
+  body.position.y = wheelR + 0.275; body.castShadow = true; body.receiveShadow = true;
+  g.add(body);
+  var cabin = new THREE.Mesh(new THREE.BoxGeometry(1.0,0.4,0.85), new THREE.MeshStandardMaterial({color:0xbfe3ff, transparent:true, opacity:0.55, roughness:0.1}));
+  cabin.position.set(-0.1, wheelR+0.55+0.2, 0); cabin.castShadow = true;
+  g.add(cabin);
+  var wheelGeo = new THREE.CylinderGeometry(wheelR,wheelR,0.22,14);
+  var wheelMat = new THREE.MeshStandardMaterial({color:0x1a1a1a, roughness:0.9});
+  [[0.62,0.52],[0.62,-0.52],[-0.62,0.52],[-0.62,-0.52]].forEach(function(o){
+    var wheel = new THREE.Mesh(wheelGeo, wheelMat);
+    wheel.rotation.x = Math.PI/2;
+    wheel.position.set(o[0], wheelR, o[1]);
+    g.add(wheel);
+  });
+  var headlight = new THREE.Mesh(new THREE.SphereGeometry(0.08,8,8), new THREE.MeshStandardMaterial({color:0xffffee, emissive:0xffffcc, emissiveIntensity:0.6}));
+  headlight.position.set(0.95, wheelR+0.25, 0.3);
+  g.add(headlight);
+  var headlight2 = headlight.clone(); headlight2.position.z = -0.3;
+  g.add(headlight2);
+  return g;
 }
 
-function drawTank(){
-  ctx.fillStyle='#333'; rr(TANK_UI.x,TANK_UI.y,TANK_UI.w,TANK_UI.h,6); ctx.fill();
-  ctx.fillStyle='#2ecc71'; rr(TANK_UI.x+4,TANK_UI.y+4,TANK_UI.w-8,TANK_UI.h-8,4); ctx.fill();
-  ctx.fillStyle='#fff'; ctx.font='bold 12px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('⛽ Unlimited Fuel', TANK_UI.x+TANK_UI.w/2, TANK_UI.y+TANK_UI.h/2+4);
+function resetCarMeshes(){
+  for(var id in carMeshes){ scene.remove(carMeshes[id].group); }
+  carMeshes = {};
+  for(var qid in queueLabels){ removeWorldLabel(queueLabels[qid]); }
+  queueLabels = {};
 }
 
-function drawPump(p,idx){
-  if(!p.unlocked){
-    ctx.fillStyle='rgba(0,0,0,0.35)'; rr(p.x-28,p.y-70,56,90,6); ctx.fill();
-    ctx.fillStyle='#fff'; ctx.font='bold 12px sans-serif'; ctx.textAlign='center';
-    ctx.fillText('🔒', p.x, p.y-30);
-    ctx.font='11px sans-serif';
-    ctx.fillText(fmt(pumpUnlockCost(idx)), p.x, p.y-10);
-    return;
-  }
-  ctx.fillStyle='#ecf0f1'; rr(p.x-18,p.y+10,36,10,3); ctx.fill();
-  ctx.fillStyle='#c0392b';
-  rr(p.x-16,p.y-60,32,70,4); ctx.fill();
-  ctx.fillStyle='#fff'; rr(p.x-11,p.y-52,22,26,3); ctx.fill();
-  ctx.fillStyle='#2c3e50'; ctx.font='bold 11px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('P'+(idx+1), p.x, p.y-34);
-  if(p.fueling){
-    ctx.fillStyle='#333'; rr(p.x-22,p.y-78,44,8,3); ctx.fill();
-    ctx.fillStyle='#2ecc71'; rr(p.x-20,p.y-76,40*clamp(p.progress,0,1),4,2); ctx.fill();
-  } else if(p.car){
-    ctx.fillStyle='#f1c40f'; ctx.font='16px sans-serif'; ctx.fillText('▶', p.x, p.y-78);
-  }
-}
-
-function drawCar(c){
-  ctx.save();
-  ctx.fillStyle=c.color;
-  rr(c.x-22,c.y-12,44,20,6); ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,0.6)';
-  rr(c.x-12,c.y-10,20,10,3); ctx.fill();
-  ctx.fillStyle='#222';
-  ctx.beginPath(); ctx.arc(c.x-12,c.y+9,5,0,Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(c.x+12,c.y+9,5,0,Math.PI*2); ctx.fill();
-  if(c.state==='queue'){
-    ctx.fillStyle='#fff'; ctx.font='10px sans-serif'; ctx.textAlign='center';
-    ctx.fillText(Math.ceil(c.patience)+'s', c.x, c.y-16);
-  }
-  ctx.restore();
-}
-
-function star(x,y,r,filled){
-  ctx.fillStyle = filled?'#f1c40f':'rgba(255,255,255,0.25)';
-  ctx.beginPath();
-  for(var i=0;i<5;i++){
-    var a=-Math.PI/2 + i*2*Math.PI/5;
-    var a2=a+Math.PI/5;
-    ctx.lineTo(x+Math.cos(a)*r, y+Math.sin(a)*r);
-    ctx.lineTo(x+Math.cos(a2)*r*0.45, y+Math.sin(a2)*r*0.45);
-  }
-  ctx.closePath(); ctx.fill();
-}
-
-var BTN = {}; // populated each frame for hit-testing
-function drawHUD(){
-  ctx.fillStyle='rgba(20,20,25,0.82)'; ctx.fillRect(0,0,VW,46);
-  ctx.textAlign='left'; ctx.fillStyle='#2ecc71'; ctx.font='bold 20px sans-serif';
-  ctx.fillText(fmt(cash), 14, 30);
-  ctx.fillStyle='#ecf0f1'; ctx.font='14px sans-serif';
-  ctx.fillText('Day '+day, 150, 20);
-  var pct = clamp(dayTimer/DAY_LEN,0,1);
-  ctx.fillStyle='#444'; ctx.fillRect(150,26,90,8);
-  ctx.fillStyle= dayTimer<DAY_LEN*0.5?'#f1c40f':'#34495e';
-  ctx.fillRect(150,26,90*pct,8);
-  var stars = clamp(Math.floor(reputation/20)+1,1,5);
-  for(var i=0;i<5;i++) star(268+i*16,20,7,i<stars);
-  ctx.fillStyle='#ecf0f1'; ctx.font='13px sans-serif'; ctx.textAlign='left';
-  ctx.fillText('Market: '+fmt2(marketPrice)+'/gal', 380, 18);
-  ctx.fillText('Served today: '+carsServedTotal, 380, 36);
-
-  // price controls
-  ctx.textAlign='center';
-  BTN.priceDown = {x:600,y:8,w:26,h:30};
-  BTN.priceUp = {x:760,y:8,w:26,h:30};
-  ctx.fillStyle='#34495e'; rr(BTN.priceDown.x,BTN.priceDown.y,BTN.priceDown.w,BTN.priceDown.h,5); ctx.fill();
-  rr(BTN.priceUp.x,BTN.priceUp.y,BTN.priceUp.w,BTN.priceUp.h,5); ctx.fill();
-  ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
-  ctx.fillText('-', BTN.priceDown.x+13, BTN.priceDown.y+22);
-  ctx.fillText('+', BTN.priceUp.x+13, BTN.priceUp.y+22);
-  ctx.font='bold 15px sans-serif'; ctx.fillStyle='#f1c40f';
-  ctx.fillText('Your price: '+fmt2(price)+'/gal', 680, 28);
-
-  // bottom bar
-  ctx.fillStyle='rgba(20,20,25,0.82)'; ctx.fillRect(0,VH-56,VW,56);
-  BTN.shop = {x:VW/2-65,y:VH-46,w:130,h:36};
-
-  drawBtn(BTN.shop, '🛒 Upgrades Shop', true);
-
-  ctx.fillStyle='rgba(255,255,255,0.6)'; ctx.font='11px sans-serif';
-  ctx.textAlign='left';
-  ctx.fillText('Attendants: '+attendants+'   Pumps: '+pumpsUnlocked+'/4', 20, VH-8);
-}
-
-function drawBtn(b,label,enabled){
-  ctx.fillStyle = enabled ? '#2c7a4b' : '#555';
-  rr(b.x,b.y,b.w,b.h,7); ctx.fill();
-  ctx.fillStyle = enabled ? '#fff' : '#999';
-  ctx.font='bold 13px sans-serif'; ctx.textAlign='center';
-  ctx.fillText(label, b.x+b.w/2, b.y+b.h/2+5);
-}
-
-var SHOP_BTNS = [];
-function drawShop(){
-  ctx.fillStyle='rgba(0,0,0,0.7)'; ctx.fillRect(0,0,VW,VH);
-  ctx.fillStyle='#1e2a3a'; rr(VW/2-260,70,520,400,12); ctx.fill();
-  ctx.fillStyle='#fff'; ctx.font='bold 24px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('Upgrades Shop', VW/2, 112);
-  SHOP_BTNS = [];
-  for(var i=0;i<SHOP_ITEMS.length;i++){
-    var it = SHOP_ITEMS[i];
-    var y = 140 + i*58;
-    var maxed = it.maxed();
-    var b = {x:VW/2-240,y:y,w:400,h:46};
-    SHOP_BTNS.push(b);
-    ctx.fillStyle = maxed ? '#333' : '#2c3e50';
-    rr(b.x,b.y,b.w,b.h,8); ctx.fill();
-    ctx.textAlign='left'; ctx.fillStyle='#fff'; ctx.font='bold 15px sans-serif';
-    ctx.fillText(it.name, b.x+14, b.y+19);
-    ctx.font='11px sans-serif'; ctx.fillStyle='#bdc3c7';
-    ctx.fillText(it.desc(), b.x+14, b.y+36);
-    ctx.textAlign='right'; ctx.font='bold 15px sans-serif';
-    ctx.fillStyle = maxed ? '#888' : '#2ecc71';
-    ctx.fillText(it.get(), b.x+b.w-14, b.y+28);
-  }
-  ctx.fillStyle='#c0392b'; rr(VW/2+190,80,50,34,8); ctx.fill();
-  ctx.fillStyle='#fff'; ctx.font='bold 16px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('X', VW/2+215, 102);
-  BTN.shopClose = {x:VW/2+190,y:80,w:50,h:34};
-}
-
-function drawDaySummary(){
-  ctx.fillStyle='rgba(0,0,0,0.75)'; ctx.fillRect(0,0,VW,VH);
-  ctx.fillStyle='#1e2a3a'; rr(VW/2-220,140,440,260,12); ctx.fill();
-  ctx.fillStyle='#fff'; ctx.font='bold 24px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('Day '+daySummary.day+' Complete', VW/2, 180);
-  ctx.font='15px sans-serif'; ctx.textAlign='left';
-  var lx = VW/2-160, ly=220;
-  ctx.fillText('Cars served: '+daySummary.served, lx, ly);
-  ctx.fillText('Rent: '+fmt(daySummary.rent), lx, ly+30);
-  ctx.fillText('Wages: '+fmt(daySummary.wages), lx, ly+60);
-  ctx.fillStyle='#2ecc71'; ctx.font='bold 17px sans-serif';
-  ctx.fillText('Cash on hand: '+fmt(daySummary.cashAfter), lx, ly+100);
-  ctx.textAlign='center'; ctx.fillStyle='#f1c40f'; ctx.font='13px sans-serif';
-  ctx.fillText('Market price will shift when the next day starts', VW/2, ly+130);
-  BTN.nextDay = {x:VW/2-90,y:360,w:180,h:40};
-  drawBtn(BTN.nextDay, 'Start Day '+(daySummary.day+1), true);
-}
-
-function drawStart(){
-  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,VW,VH);
-  ctx.fillStyle='#fff'; ctx.font='bold 42px sans-serif'; ctx.textAlign='center';
-  ctx.fillText("Fill 'Er Up!", VW/2, 190);
-  ctx.font='18px sans-serif'; ctx.fillStyle='#ecf0f1';
-  ctx.fillText('Run your own gas station. Set prices, serve cars, keep the tank full.', VW/2, 230);
-  ctx.font='14px sans-serif'; ctx.fillStyle='#bdc3c7';
-  ctx.fillText('Click parked cars to fuel them (or hire attendants to automate).', VW/2, 258);
-  ctx.fillText('Best day survived: '+hi.bestDay+'   Best cash: '+fmt(hi.bestCash), VW/2, 282);
-  BTN.start = {x:VW/2-100,y:320,w:200,h:48};
-  drawBtn(BTN.start, 'START GAME', true);
-}
-
-function drawGameOver(){
-  ctx.fillStyle='rgba(0,0,0,0.75)'; ctx.fillRect(0,0,VW,VH);
-  ctx.fillStyle='#e74c3c'; ctx.font='bold 36px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('BANKRUPT!', VW/2, 200);
-  ctx.fillStyle='#fff'; ctx.font='18px sans-serif';
-  ctx.fillText('You survived '+day+' day'+(day===1?'':'s')+'.', VW/2, 240);
-  ctx.fillText('Best day survived: '+hi.bestDay+'   Best cash: '+fmt(hi.bestCash), VW/2, 266);
-  BTN.restart = {x:VW/2-100,y:310,w:200,h:48};
-  drawBtn(BTN.restart, 'TRY AGAIN', true);
-}
-
-// ── Input ─────────────────────────────────────────────────────────────────────
-function ptr(cx,cy){
-  var p = cpos(cx,cy);
-  if(state==='start'){ if(inB(p,BTN.start)) { newGame(); state='playing'; } return; }
-  if(state==='gameover'){ if(inB(p,BTN.restart)) { newGame(); state='playing'; } return; }
-  if(state==='daysummary'){ if(BTN.nextDay && inB(p,BTN.nextDay)) nextDay(); return; }
-  if(state==='shop'){
-    if(BTN.shopClose && inB(p,BTN.shopClose)){ state='playing'; return; }
-    for(var i=0;i<SHOP_BTNS.length;i++){
-      if(inB(p,SHOP_BTNS[i]) && !SHOP_ITEMS[i].maxed()){ SHOP_ITEMS[i].buy(); return; }
+function syncCars(){
+  var seen = {};
+  for(var i=0;i<cars.length;i++){
+    var c = cars[i];
+    seen[c.id] = true;
+    var mesh = carMeshes[c.id];
+    if(!mesh){
+      var group = createCarMesh(c.color);
+      scene.add(group);
+      mesh = carMeshes[c.id] = {group:group};
     }
-    return;
+    var wp = worldPos(c.x, c.y);
+    mesh.group.position.set(wp.x, 0, wp.z);
+    var facing = (c.state==='leaving') ? Math.PI : 0;
+    mesh.group.rotation.y = facing;
+
+    if(c.state==='queue'){
+      var lbl = queueLabels[c.id] || (queueLabels[c.id] = makeWorldLabel('tag'));
+      showWorldLabel(lbl, worldPos(c.x,c.y,1.1), Math.ceil(c.patience)+'s');
+    } else if(queueLabels[c.id]){
+      removeWorldLabel(queueLabels[c.id]);
+      delete queueLabels[c.id];
+    }
   }
-  if(state!=='playing') return;
-
-  if(BTN.priceDown && inB(p,BTN.priceDown)){ price = clamp(price-0.10, WHOLESALE+0.10, 4.50); return; }
-  if(BTN.priceUp && inB(p,BTN.priceUp)){ price = clamp(price+0.10, WHOLESALE+0.10, 4.50); return; }
-  if(BTN.shop && inB(p,BTN.shop)){ state='shop'; return; }
-
-  // click a parked pump/car to start fueling manually
-  for(var pi=0;pi<pumps.length;pi++){
-    var pu = pumps[pi];
-    if(!pu.unlocked) continue;
-    var hit = p.x>pu.x-28 && p.x<pu.x+28 && p.y>pu.y-90 && p.y<pu.y+24;
-    if(hit && pu.car && !pu.fueling){ startFueling(pi); return; }
+  for(var id in carMeshes){
+    if(!seen[id]){ scene.remove(carMeshes[id].group); delete carMeshes[id]; }
+  }
+  for(var qid2 in queueLabels){
+    if(!seen[qid2]){ removeWorldLabel(queueLabels[qid2]); delete queueLabels[qid2]; }
   }
 }
-canvas.addEventListener('click',function(e){ptr(e.clientX,e.clientY);});
-canvas.addEventListener('touchstart',function(e){e.preventDefault();ptr(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
+var queueLabels = {};
+
+function syncPumps(){
+  for(var i=0;i<4;i++){
+    var pu = pumps[i]; var pm = pumpMeshes[i];
+    pm.barFill.visible = pu.fueling;
+    if(pu.fueling){
+      var prog = clamp(pu.progress,0,1);
+      pm.barFill.scale.x = Math.max(prog,0.001);
+      pm.barFill.position.x = -0.5*(1-prog);
+    }
+    var lbl = pumpLabels[i];
+    if(!pu.unlocked){
+      showWorldLabel(lbl, pm.labelAnchor, '🔒 '+fmt(pumpUnlockCost(i)));
+    } else if(pu.fueling){
+      hideWorldLabel(lbl);
+    } else if(pu.car){
+      showWorldLabel(lbl, pm.labelAnchor, '▶ Tap to fuel');
+    } else {
+      hideWorldLabel(lbl);
+    }
+  }
+}
+
+// ── World-space HTML labels ───────────────────────────────────────────────────
+var labelLayer = document.getElementById('labels');
+function makeWorldLabel(cls){
+  var el = document.createElement('div');
+  el.className = 'worldlabel'+(cls?' '+cls:'');
+  labelLayer.appendChild(el);
+  return el;
+}
+function projectToScreen(vec3){
+  var v = vec3.clone().project(camera);
+  return {
+    x: (v.x*0.5+0.5)*window.innerWidth,
+    y: (-v.y*0.5+0.5)*window.innerHeight,
+    visible: v.z < 1
+  };
+}
+function showWorldLabel(el, anchor, text){
+  var s = projectToScreen(anchor);
+  if(!s.visible){ el.classList.remove('show'); return; }
+  el.textContent = text;
+  el.style.left = s.x+'px'; el.style.top = s.y+'px';
+  el.classList.add('show');
+}
+function hideWorldLabel(el){ el.classList.remove('show'); }
+function removeWorldLabel(el){ if(el && el.parentNode) el.parentNode.removeChild(el); }
+
+var pumpLabels = [];
+for(var pl=0; pl<4; pl++) pumpLabels.push(makeWorldLabel('tag'));
+var storeLabel = makeWorldLabel('tag');
+var signLabel = makeWorldLabel('tag');
+
+function syncStaticLabels(){
+  showWorldLabel(storeLabel, storeLabelAnchor, '🍫 Unlimited Snacks');
+  showWorldLabel(signLabel, signLabelAnchor, fmt2(price)+'/gal');
+}
+
+// ── Floating text (world-anchored, rises & fades) ────────────────────────────
+var floaterLayer = document.getElementById('floaters');
+function syncFloaters(dt){
+  for(var i=floaters.length-1;i>=0;i--){
+    var f = floaters[i];
+    f.life -= dt;
+    if(f.life<=0){
+      if(f.el) floaterLayer.removeChild(f.el);
+      floaters.splice(i,1);
+      continue;
+    }
+    if(!f.el){
+      f.el = document.createElement('div');
+      f.el.className = 'floater';
+      f.el.style.color = f.color;
+      f.el.textContent = f.text;
+      floaterLayer.appendChild(f.el);
+    }
+    var t = 1 - f.life/f.total;
+    var pos = f.wp.clone(); pos.y += t*1.4;
+    var s = projectToScreen(pos);
+    f.el.style.left = s.x+'px'; f.el.style.top = s.y+'px';
+    f.el.style.opacity = s.visible ? clamp(f.life/f.total,0,1) : 0;
+  }
+}
+
+// ── Day/night lighting ────────────────────────────────────────────────────────
+function hexToRgb01(hex){ return [((hex>>16)&255)/255, ((hex>>8)&255)/255, (hex&255)/255]; }
+function lerpRgb(aHex,bHex,t){
+  t=clamp(t,0,1);
+  var a=hexToRgb01(aHex), b=hexToRgb01(bHex);
+  return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t];
+}
+// Sky color progresses day -> dusk -> night across the workday (bright at day start).
+var SKY_DAY=0x7ec8ff, SKY_DUSK=0xffd27f, SKY_EVENING=0x2c3e6e, SKY_NIGHT=0x111a33;
+function skyRGBFor(t){
+  if(t<0.5){ var k=t/0.5; return lerpRgb(SKY_DAY,SKY_DUSK, Math.max(0,k*2-1)); }
+  var k2=(t-0.5)/0.5;
+  if(k2<0.6) return lerpRgb(SKY_DUSK,SKY_EVENING,k2/0.6);
+  return lerpRgb(SKY_EVENING,SKY_NIGHT,(k2-0.6)/0.4);
+}
+var skyRGB = [0.5,0.78,1];
+function updateLighting(){
+  var t = clamp(dayTimer/DAY_LEN,0,1);
+  var sunAngle = t*Math.PI;
+  sun.position.set(Math.cos(sunAngle)*26, Math.max(Math.sin(sunAngle),0.12)*22+5, 8);
+  sun.target.position.set(0,0,0);
+
+  var rgb = skyRGBFor(t);
+  skyRGB = rgb;
+  var lum = rgb[0]*0.299 + rgb[1]*0.587 + rgb[2]*0.114;
+  scene.background = new THREE.Color(rgb[0],rgb[1],rgb[2]);
+  scene.fog.color.setRGB(rgb[0],rgb[1],rgb[2]);
+  ambient.intensity = 0.16 + lum*0.6;
+  ambient.color.setRGB(rgb[0]*0.5+0.5, rgb[1]*0.5+0.5, rgb[2]*0.5+0.5);
+  sun.intensity = 0.2 + lum*1.05;
+
+  var dark = clamp(1-lum*1.35,0,1);
+  for(var i=0;i<canopyLights.length;i++) canopyLights[i].intensity = dark*1.2;
+  winMat.emissiveIntensity = dark*0.9;
+}
+
+// ── HUD / modal rendering ─────────────────────────────────────────────────────
+var elCash = document.getElementById('cash');
+var elDayLabel = document.getElementById('day-label');
+var elDayProgress = document.getElementById('day-progress');
+var elStars = document.getElementById('stars');
+var elMarket = document.getElementById('market-label');
+var elServed = document.getElementById('served-label');
+var elPriceLabel = document.getElementById('price-label');
+var elFleetInfo = document.getElementById('fleet-info');
+
+function refreshHUD(){
+  elCash.textContent = fmt(cash);
+  elDayLabel.textContent = 'Day '+day;
+  elDayProgress.style.width = (clamp(dayTimer/DAY_LEN,0,1)*100)+'%';
+  var starsCount = clamp(Math.floor(reputation/20)+1,1,5);
+  var starsHtml = '';
+  for(var i=0;i<5;i++) starsHtml += '<span class="'+(i<starsCount?'star-lit':'star-dim')+'">★</span>';
+  elStars.innerHTML = starsHtml;
+  elMarket.textContent = 'Market: '+fmt2(marketPrice)+'/gal';
+  elServed.textContent = 'Served today: '+carsServedTotal;
+  elPriceLabel.textContent = 'Your price: '+fmt2(price)+'/gal';
+  elFleetInfo.textContent = 'Attendants: '+attendants+'   Pumps: '+pumpsUnlocked+'/4';
+}
+
+function renderShopModal(){
+  var rows = document.getElementById('shop-rows');
+  rows.innerHTML = '';
+  SHOP_ITEMS.forEach(function(it, idx){
+    var maxed = it.maxed();
+    var row = document.createElement('div');
+    row.className = 'shop-row'+(maxed?' maxed':'');
+    var costNum = maxed ? Infinity : parseInt((it.get()+'').replace(/[^0-9]/g,'')||'0',10);
+    var afford = !maxed && cash>=costNum;
+    row.innerHTML =
+      '<div><div class="shop-row-name">'+it.name+'</div><div class="shop-row-desc">'+it.desc()+'</div></div>'+
+      '<button '+(maxed||!afford?'disabled':'')+'>'+it.get()+'</button>';
+    row.querySelector('button').addEventListener('click', function(i){ return function(){
+      SHOP_ITEMS[i].buy(); renderShopModal(); refreshHUD();
+    };}(idx));
+    rows.appendChild(row);
+  });
+}
+
+function showDaySummary(){
+  document.getElementById('ds-title').textContent = 'Day '+daySummary.day+' Complete';
+  document.getElementById('ds-served').textContent = daySummary.served;
+  document.getElementById('ds-rent').textContent = fmt(daySummary.rent);
+  document.getElementById('ds-wages').textContent = fmt(daySummary.wages);
+  document.getElementById('ds-cash').textContent = fmt(daySummary.cashAfter);
+  document.getElementById('ds-next-btn').textContent = 'Start Day '+(daySummary.day+1);
+}
+function showGameOver(){
+  document.getElementById('go-days').textContent = 'You survived '+day+' day'+(day===1?'':'s')+'.';
+  document.getElementById('go-hiscore').textContent = 'Best day survived: '+hi.bestDay+'   Best cash: '+fmt(hi.bestCash);
+}
+
+var rushBannerTimeout = null;
+function showBanner(){
+  var b = document.getElementById('rush-banner');
+  b.classList.add('show');
+  clearTimeout(rushBannerTimeout);
+  rushBannerTimeout = setTimeout(function(){ b.classList.remove('show'); }, 2600);
+}
+
+function setState(s){
+  state = s;
+  document.getElementById('start-modal').hidden = s!=='start';
+  document.getElementById('shop-modal').hidden = s!=='shop';
+  document.getElementById('daysummary-modal').hidden = s!=='daysummary';
+  document.getElementById('gameover-modal').hidden = s!=='gameover';
+}
+
+// ── UI wiring ─────────────────────────────────────────────────────────────────
+document.getElementById('start-hiscore').textContent = 'Best day survived: '+hi.bestDay+'   Best cash: '+fmt(hi.bestCash);
+document.getElementById('start-btn').addEventListener('click', function(){ newGame(); setState('playing'); });
+document.getElementById('go-restart-btn').addEventListener('click', function(){ newGame(); setState('playing'); });
+document.getElementById('ds-next-btn').addEventListener('click', function(){ nextDay(); });
+document.getElementById('shop-open-btn').addEventListener('click', function(){ renderShopModal(); setState('shop'); });
+document.getElementById('shop-close-btn').addEventListener('click', function(){ setState('playing'); });
+document.getElementById('price-down').addEventListener('click', function(){ price = clamp(price-0.10, WHOLESALE+0.10, 4.50); });
+document.getElementById('price-up').addEventListener('click', function(){ price = clamp(price+0.10, WHOLESALE+0.10, 4.50); });
+
+// tap-to-fuel raycasting (independent of OrbitControls drag)
+var raycaster = new THREE.Raycaster();
+var ndc = new THREE.Vector2();
+var downPt = null, dragged = false;
+canvasEl.addEventListener('pointerdown', function(e){ downPt = {x:e.clientX,y:e.clientY}; dragged = false; });
+canvasEl.addEventListener('pointermove', function(e){
+  if(downPt && Math.hypot(e.clientX-downPt.x, e.clientY-downPt.y) > 6) dragged = true;
+});
+canvasEl.addEventListener('pointerup', function(e){
+  if(downPt && !dragged) handleTap(e.clientX, e.clientY);
+  downPt = null;
+});
+function handleTap(cx,cy){
+  if(state!=='playing') return;
+  ndc.x = (cx/window.innerWidth)*2-1;
+  ndc.y = -(cy/window.innerHeight)*2+1;
+  raycaster.setFromCamera(ndc, camera);
+  var hits = raycaster.intersectObjects(raycastTargets);
+  if(hits.length){
+    var idx = hits[0].object.userData.pumpIndex;
+    var pu = pumps[idx];
+    if(pu.unlocked && pu.car && !pu.fueling) startFueling(idx);
+  }
+}
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
+var last = 0;
 function frame(ts){
   if(!last) last = ts;
-  var dt = Math.min((ts-last)/1000, 0.05);
+  var dt = Math.min((ts-last)/1000, 0.1);
   last = ts;
+
   update(dt);
-  draw();
+  updateLighting();
+  syncCars();
+  syncPumps();
+  syncStaticLabels();
+  syncFloaters(dt);
+  refreshHUD();
+
+  controls.update();
+  renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
+newGame();
 requestAnimationFrame(frame);
 </script>
 </body>
