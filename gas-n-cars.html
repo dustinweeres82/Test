@@ -504,7 +504,7 @@ var SHOFF = 0.42;
 function drawShadows(){
   var i;
   /* canopy: the big one that makes the forecourt feel roofed */
-  shadowRect(-3.2+SHOFF*-2.6, -1.2+SHOFF*-2.6, 5.2, 7.6, 0, 0.16);
+  shadowRect(-1.4+SHOFF*-2.6, -1.2+SHOFF*-2.6, 6.9, 7.6, 0, 0.16);
   /* station block */
   shadowRect(SHOP.x+SHOFF*-1.8, SHOP.z+SHOFF*-1.8, SHOP.w/2+0.2, SHOP.d/2+0.2, 0, 0.20);
   /* pump islands */
@@ -1895,23 +1895,36 @@ function stnGroundDetail(){
   groundQuad( 3.10, 3.7, 0.54, 0.40, 0.3, [62,52,44], 0.26, 0.021);
 }
 function stnCanopy(B0){
-  var cw=5.2, cd=7.6, ch=4.5, cx0=-3.2, cz0=-1.2, i, e;
-  for(i=-1;i<=1;i+=2)
-    drawBox(B0,[cx0,0,cz0], i*(cw-0.6), ch/2, i*(cd-0.9), 0.16, ch/2, 0.16, C_STEEL);
+  /* wide enough to roof both pump islands and both car lanes */
+  var cw=6.9, cd=7.6, ch=4.5, cx0=-1.4, cz0=-1.2, i, j, e;
+  var UNDER = ch - 0.006;                 /* the slab's underside, not its top */
+  /* four posts, one at each corner, with a wider foot */
+  for(i=-1;i<=1;i+=2) for(j=-1;j<=1;j+=2){
+    drawBox(B0,[cx0,0,cz0], i*(cw-0.6), ch/2, j*(cd-0.9), 0.17, ch/2, 0.17, C_STEEL);
+    drawBox(B0,[cx0,0,cz0], i*(cw-0.6), 0.10, j*(cd-0.9), 0.30, 0.10, 0.30, stnCREAM);
+  }
   drawBox(B0,[cx0,ch,cz0], 0, 0.26, 0, cw, 0.26, cd, stnCREAM);
   for(e=-1;e<=1;e+=2){
     drawBox(B0,[cx0,ch,cz0], 0, 0.42, e*cd, cw+0.05, 0.16, 0.07, stnORANGE);
     drawBox(B0,[cx0,ch,cz0], e*cw, 0.42, 0, 0.07, 0.16, cd+0.05, stnORANGE);
   }
   drawBox(B0,[cx0,ch,cz0], 0, 0.32, -cd-0.09, cw*0.44, 0.24, 0.05, C_BLUE);
-  /* lit soffit panel + two painted strips so the underside is not a grey slab */
-  emitPoly([cx0-cw+0.30,ch+0.004,cz0-cd+0.30, cx0+cw-0.30,ch+0.004,cz0-cd+0.30,
-            cx0+cw-0.30,ch+0.004,cz0+cd-0.30, cx0-cw+0.30,ch+0.004,cz0+cd-0.30],
+  /* bright soffit under the slab, edged by two painted strips */
+  emitPoly([cx0-cw+0.30,UNDER,cz0-cd+0.30, cx0+cw-0.30,UNDER,cz0-cd+0.30,
+            cx0+cw-0.30,UNDER,cz0+cd-0.30, cx0-cw+0.30,UNDER,cz0+cd-0.30],
            lit(shade([254,248,236],1.34),0,-1,0), { seam:false });
   for(e=-1;e<=1;e+=2)
-    emitPoly([cx0+e*3.2-0.13,ch+0.006,cz0-cd+0.30, cx0+e*3.2+0.13,ch+0.006,cz0-cd+0.30,
-              cx0+e*3.2+0.13,ch+0.006,cz0+cd-0.30, cx0+e*3.2-0.13,ch+0.006,cz0+cd-0.30],
+    emitPoly([cx0+e*4.2-0.13,UNDER-0.004,cz0-cd+0.30, cx0+e*4.2+0.13,UNDER-0.004,cz0-cd+0.30,
+              cx0+e*4.2+0.13,UNDER-0.004,cz0+cd-0.30, cx0+e*4.2-0.13,UNDER-0.004,cz0+cd-0.30],
              lit(shade(stnORANGE,1.30),0,-1,0), { seam:false });
+  /* recessed downlights, so the roof reads as lit rather than as a ceiling */
+  for(i=-1;i<=1;i+=2) for(j=-1;j<=1;j+=2){
+    var lx=cx0+i*3.1, lz=cz0+j*3.4;
+    drawBox(B0,[0,0,0], lx, UNDER-0.10, lz, 0.62, 0.10, 0.40, [58,62,72]);
+    emitPoly([lx-0.54,UNDER-0.205,lz-0.32, lx+0.54,UNDER-0.205,lz-0.32,
+              lx+0.54,UNDER-0.205,lz+0.32, lx-0.54,UNDER-0.205,lz+0.32],
+             [255,250,228], { seam:false });
+  }
   sprite(cx0, ch+0.66, cz0-cd, function(sx,sy,sc){ if(sc<8) return; octxLabel(sx,sy,sc); }, -2);
 }
 function stnPumps(B0){
