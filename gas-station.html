@@ -72,9 +72,8 @@ var TANK_UI = {x:40,y:360,w:150,h:40};
 // ── Game state ────────────────────────────────────────────────────────────────
 var state = 'start'; // start, playing, shop, daysummary, gameover, paused
 var cash, day, dayTimer, marketPrice, price, reputation;
-var tankCap, tankGal, truckETA;
 var storeStock, storeCap;
-var pumpsUnlocked, attendants, tankLevel, adLevel, hasCashier;
+var pumpsUnlocked, attendants, adLevel, hasCashier;
 var pumps, cars, floaters, particles;
 var spawnTimer, rushUntil, rushTriggeredToday;
 var daySummary = null;
@@ -88,11 +87,10 @@ function newGame(){
   marketPrice = 3.10;
   price = 2.99;
   reputation = 60;
-  tankCap = 300; tankGal = 300; truckETA = 0;
   storeStock = 25; storeCap = 100;
-  pumpsUnlocked = 2; attendants = 0; tankLevel = 0; adLevel = 0; hasCashier = false;
+  pumpsUnlocked = 2; attendants = 0; adLevel = 0; hasCashier = false;
   pumps = [];
-  for(var i=0;i<4;i++) pumps.push({x:PUMP_X[i],y:PUMP_Y,unlocked:i<pumpsUnlocked,car:null,fueling:false,progress:0,dur:1,noFuel:false});
+  for(var i=0;i<4;i++) pumps.push({x:PUMP_X[i],y:PUMP_Y,unlocked:i<pumpsUnlocked,car:null,fueling:false,progress:0,dur:1});
   cars = []; floaters = []; particles = [];
   spawnTimer = 2;
   rushUntil = 0; rushTriggeredToday = false;
@@ -106,7 +104,6 @@ function addFloat(x,y,text,color){ floaters.push({x:x,y:y,text:text,color:color,
 // ── Economy helpers ───────────────────────────────────────────────────────────
 function pumpUnlockCost(idx){ return idx===2?250:(idx===3?500:0); }
 function attendantCost(){ return 250 + attendants*200; }
-function tankUpgradeCost(){ return 200 + tankLevel*150; }
 function adCost(){ return 150 + adLevel*150; }
 var CASHIER_COST = 350;
 function dailyWages(){ return attendants*20 + (hasCashier?15:0); }
@@ -156,22 +153,15 @@ function updateCars(dt){
       var p = pumps[c.targetPump];
       var tx = p.x, ty = p.y-38;
       var dx=tx-c.x, dy=ty-c.y, dist=Math.sqrt(dx*dx+dy*dy);
-      if(dist<3){ c.x=tx; c.y=ty; c.state='parked'; p.progress=0; p.fueling=false; p.noFuel=false; }
+      if(dist<3){ c.x=tx; c.y=ty; c.state='parked'; p.progress=0; p.fueling=false; }
       else { c.x += dx/dist*140*dt; c.y += dy/dist*140*dt; }
     } else if(c.state==='parked'){
       var p2 = pumps[c.targetPump];
-      if(!p2.fueling){
-        if(tankGal < 5){ p2.noFuel=true; c.patience -= dt; }
-        else if(attendants>=1){ startFueling(c.targetPump); }
-      }
+      if(!p2.fueling && attendants>=1){ startFueling(c.targetPump); }
       if(p2.fueling){
         p2.dur = clamp(3.2/(1+attendants*0.18), 0.9, 3.2);
         p2.progress += dt/p2.dur;
         if(p2.progress>=1){ finishFueling(c.targetPump); }
-      }
-      if(p2.noFuel && c.patience<=0){
-        addFloat(c.x,c.y-20,'No fuel! 😠','#e74c3c'); reputation=clamp(reputation-4,0,100);
-        p2.car=null; p2.noFuel=false; cars.splice(i,1); i--; continue;
       }
     } else if(c.state==='leaving'){
       c.x -= 160*dt; c.y += (ROAD_Y+40-c.y)*0.06;
@@ -206,8 +196,7 @@ function startFueling(pumpIdx){
 function finishFueling(pumpIdx){
   var p = pumps[pumpIdx];
   var c = p.car;
-  var gal = Math.min(c.gallons, tankGal);
-  tankGal -= gal;
+  var gal = c.gallons;
   var revenue = gal*price;
   cash += revenue;
   addFloat(p.x,p.y-60, fmt2(revenue), '#2ecc71');
@@ -221,17 +210,7 @@ function finishFueling(pumpIdx){
   c.state='leaving';
 }
 
-// ── Fuel truck & store ────────────────────────────────────────────────────────
-function orderFuel(){
-  if(truckETA>0) return;
-  var need = tankCap - tankGal;
-  if(need<10) return;
-  var cost = need*WHOLESALE;
-  if(cash<cost) { addFloat(TANK_UI.x+60,TANK_UI.y-10,'Not enough cash!','#e74c3c'); return; }
-  cash -= cost;
-  truckETA = 14;
-  addFloat(TANK_UI.x+60,TANK_UI.y-10,'Truck en route...','#3498db');
-}
+// ── Store ─────────────────────────────────────────────────────────────────────
 function restock(){
   var cost = 50;
   if(storeStock>=storeCap){ return; }
@@ -252,12 +231,6 @@ function buyAttendant(){
   if(cash<cost) return;
   cash -= cost; attendants++;
 }
-function buyTank(){
-  if(tankLevel>=4) return;
-  var cost = tankUpgradeCost();
-  if(cash<cost) return;
-  cash -= cost; tankLevel++; tankCap += 400;
-}
 function buyAd(){
   if(reputation>=100) return;
   var cost = adCost();
@@ -273,7 +246,6 @@ function buyCashier(){
 var SHOP_ITEMS = [
   {key:'pump', name:'Unlock Pump', get:function(){return pumpsUnlocked<4?fmt(pumpUnlockCost(pumpsUnlocked)):'MAX';}, desc:function(){return 'Pumps: '+pumpsUnlocked+'/4';}, buy:buyPump, maxed:function(){return pumpsUnlocked>=4;}},
   {key:'att', name:'Hire Attendant', get:function(){return fmt(attendantCost());}, desc:function(){return 'Owned: '+attendants+' (auto-fuels cars, wage $20/day ea)';}, buy:buyAttendant, maxed:function(){return false;}},
-  {key:'tank', name:'Bigger Tank', get:function(){return tankLevel<4?fmt(tankUpgradeCost()):'MAX';}, desc:function(){return 'Capacity: '+tankCap+' gal (+400)';}, buy:buyTank, maxed:function(){return tankLevel>=4;}},
   {key:'ad', name:'Advertise', get:function(){return reputation<100?fmt(adCost()):'MAX';}, desc:function(){return 'Reputation: '+Math.round(reputation)+'/100 (+15)';}, buy:buyAd, maxed:function(){return reputation>=100;}},
   {key:'cashier', name:'Hire Cashier', get:function(){return hasCashier?'OWNED':fmt(CASHIER_COST);}, desc:function(){return 'Auto-restocks store, wage $15/day';}, buy:buyCashier, maxed:function(){return hasCashier;}}
 ];
@@ -318,7 +290,6 @@ function update(dt){
 
   updateCars(dt);
 
-  if(truckETA>0){ truckETA -= dt; if(truckETA<=0){ truckETA=0; tankGal = tankCap; addFloat(TANK_UI.x+60,TANK_UI.y-10,'Fuel delivered!','#2ecc71'); } }
   if(hasCashier && storeStock<=0 && cash>=50){ cash-=50; storeStock=25; }
 
   for(var i=floaters.length-1;i>=0;i--){ floaters[i].y-=30*dt; floaters[i].life-=dt; if(floaters[i].life<=0) floaters.splice(i,1); }
@@ -397,16 +368,10 @@ function drawStore(){
 }
 
 function drawTank(){
-  var pct = tankGal/tankCap;
   ctx.fillStyle='#333'; rr(TANK_UI.x,TANK_UI.y,TANK_UI.w,TANK_UI.h,6); ctx.fill();
-  var col = pct<0.2?'#e74c3c':(pct<0.45?'#f1c40f':'#2ecc71');
-  ctx.fillStyle=col; rr(TANK_UI.x+4,TANK_UI.y+4,(TANK_UI.w-8)*pct,TANK_UI.h-8,4); ctx.fill();
+  ctx.fillStyle='#2ecc71'; rr(TANK_UI.x+4,TANK_UI.y+4,TANK_UI.w-8,TANK_UI.h-8,4); ctx.fill();
   ctx.fillStyle='#fff'; ctx.font='bold 12px sans-serif'; ctx.textAlign='center';
-  ctx.fillText('Fuel: '+Math.round(tankGal)+'/'+tankCap+' gal', TANK_UI.x+TANK_UI.w/2, TANK_UI.y+TANK_UI.h/2+4);
-  if(truckETA>0){
-    ctx.fillStyle='#3498db'; ctx.font='11px sans-serif';
-    ctx.fillText('Truck ETA: '+Math.ceil(truckETA)+'s', TANK_UI.x+TANK_UI.w/2, TANK_UI.y+TANK_UI.h+14);
-  }
+  ctx.fillText('⛽ Unlimited Fuel', TANK_UI.x+TANK_UI.w/2, TANK_UI.y+TANK_UI.h/2+4);
 }
 
 function drawPump(p,idx){
@@ -419,7 +384,7 @@ function drawPump(p,idx){
     return;
   }
   ctx.fillStyle='#ecf0f1'; rr(p.x-18,p.y+10,36,10,3); ctx.fill();
-  ctx.fillStyle= p.noFuel ? '#7f8c8d' : '#c0392b';
+  ctx.fillStyle='#c0392b';
   rr(p.x-16,p.y-60,32,70,4); ctx.fill();
   ctx.fillStyle='#fff'; rr(p.x-11,p.y-52,22,26,3); ctx.fill();
   ctx.fillStyle='#2c3e50'; ctx.font='bold 11px sans-serif'; ctx.textAlign='center';
@@ -427,10 +392,8 @@ function drawPump(p,idx){
   if(p.fueling){
     ctx.fillStyle='#333'; rr(p.x-22,p.y-78,44,8,3); ctx.fill();
     ctx.fillStyle='#2ecc71'; rr(p.x-20,p.y-76,40*clamp(p.progress,0,1),4,2); ctx.fill();
-  } else if(p.car && !p.noFuel){
+  } else if(p.car){
     ctx.fillStyle='#f1c40f'; ctx.font='16px sans-serif'; ctx.fillText('▶', p.x, p.y-78);
-  } else if(p.noFuel){
-    ctx.fillStyle='#e74c3c'; ctx.font='11px sans-serif'; ctx.fillText('NO FUEL', p.x, p.y-78);
   }
 }
 
@@ -494,13 +457,9 @@ function drawHUD(){
   // bottom bar
   ctx.fillStyle='rgba(20,20,25,0.82)'; ctx.fillRect(0,VH-56,VW,56);
   BTN.restock = {x:20,y:VH-46,w:150,h:36};
-  BTN.truck = {x:190,y:VH-46,w:170,h:36};
   BTN.shop = {x:VW-150,y:VH-46,w:130,h:36};
 
   drawBtn(BTN.restock, 'Restock +25 ($50)', storeStock<storeCap && cash>=50);
-  var need = tankCap-tankGal;
-  var truckLabel = truckETA>0 ? ('Truck ETA '+Math.ceil(truckETA)+'s') : ('Order Fuel ('+fmt(need*WHOLESALE)+')');
-  drawBtn(BTN.truck, truckLabel, truckETA<=0 && need>=10 && cash>=need*WHOLESALE);
   drawBtn(BTN.shop, '🛒 Upgrades Shop', true);
 
   ctx.fillStyle='rgba(255,255,255,0.6)'; ctx.font='11px sans-serif';
@@ -604,7 +563,6 @@ function ptr(cx,cy){
   if(BTN.priceDown && inB(p,BTN.priceDown)){ price = clamp(price-0.10, WHOLESALE+0.10, 4.50); return; }
   if(BTN.priceUp && inB(p,BTN.priceUp)){ price = clamp(price+0.10, WHOLESALE+0.10, 4.50); return; }
   if(BTN.restock && inB(p,BTN.restock)){ restock(); return; }
-  if(BTN.truck && inB(p,BTN.truck)){ orderFuel(); return; }
   if(BTN.shop && inB(p,BTN.shop)){ state='shop'; return; }
 
   // click a parked pump/car to start fueling manually
@@ -612,7 +570,7 @@ function ptr(cx,cy){
     var pu = pumps[pi];
     if(!pu.unlocked) continue;
     var hit = p.x>pu.x-28 && p.x<pu.x+28 && p.y>pu.y-90 && p.y<pu.y+24;
-    if(hit && pu.car && !pu.fueling && !pu.noFuel){ startFueling(pi); return; }
+    if(hit && pu.car && !pu.fueling){ startFueling(pi); return; }
   }
 }
 canvas.addEventListener('click',function(e){ptr(e.clientX,e.clientY);});
