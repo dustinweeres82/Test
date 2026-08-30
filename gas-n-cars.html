@@ -100,6 +100,15 @@
   #wanted .swatch { display:inline-block; width:13px; height:13px; border-radius:4px;
                     vertical-align:-2px; border:2px solid #fff; box-shadow:0 0 0 1px #c3cdd6; }
   #wanted .fee { margin-top:7px; font-family:'Baloo 2'; font-weight:800; color:var(--green); }
+  #ball { left:16px; bottom:96px; width:214px; padding:12px 14px; display:none; }
+  body.hasBall #ball { display:block; }
+  #ball h4 { font-family:'Baloo 2'; font-weight:800; font-size:14px; letter-spacing:2px;
+             color:#c8763a; margin-bottom:7px; }
+  #ball .line { font-size:12.5px; line-height:1.7; color:#5d6b78; }
+  #ball .line b { color:#2b3a4a; font-family:'Baloo 2'; font-size:14px; }
+  #ball .dots { letter-spacing:3px; color:#d0533f; }
+  #ball .msg { margin-top:7px; font-family:'Baloo 2'; font-weight:800; font-size:13.5px;
+               color:var(--green); min-height:17px; }
 
   /* modal */
   #veil { position:fixed; inset:0; background:rgba(20,28,36,.55); backdrop-filter:blur(3px); z-index:20;
@@ -155,6 +164,12 @@
     <h4>WANTED</h4>
     <div class="line" id="wantedTxt"></div>
     <div class="fee" id="wantedFee"></div>
+  </div>
+
+  <div id="ball" class="card">
+    <h4>BALL GAME</h4>
+    <div class="line" id="ballLine"></div>
+    <div class="msg" id="ballMsg"></div>
   </div>
 
   <div id="order" class="card">
@@ -353,7 +368,7 @@ function flush(){
 /* ── lighting: bright desert sun, soft sky fill, contact darkening ────────── */
 var LX=0.46, LY=0.76, LZ=0.46, AMB=0.72, STR=0.50;
 (function(){ var L=Math.sqrt(LX*LX+LY*LY+LZ*LZ); LX/=L; LY/=L; LZ/=L; })();
-var AO_BASE=0, AO_H=0;
+var AO_BASE=0, AO_H=0, DRV_STAND=0;
 function setAO(b,h){ AO_BASE=b; AO_H=h; }
 function clearAO(){ AO_H=0; }
 function lit(col,nx,ny,nz,cy){
@@ -514,6 +529,11 @@ function drawShadows(){
     var c=CARS[i];
     shadowEllipse(c.x+0.30, c.z+0.30, 1.15, 2.25, c.yaw, 1.5);
   }
+  /* the ball game */
+  if(BG.st!=='gone') shadowEllipse(BG.x+0.28, BG.z+0.28, 0.40, 0.40, 0, 0.9);
+  if(BB.st==='pitch'||BB.st==='hit'||BB.st==='loose'||BB.st==='thrown')
+    shadowEllipse(BB.x, BB.z, 0.13, 0.13, 0, clamp(1.1-BB.y*0.10,0.25,1));
+  if(BAT.down) shadowEllipse(BAT.down.x, BAT.down.z, 0.42, 0.42, 0, 0.7);
   /* the delivery truck, when it is in */
   if(typeof truck!=='undefined' && truck && truck.here)
     shadowEllipse(truck.x+0.5, truck.z+0.5, 3.2, 1.35, 0, 0.9);
@@ -558,6 +578,7 @@ function buildScenery(){
     if(Math.abs(z+30)<12 && x<80 && x>-80) return false;             /* highway  */
     if(Math.abs(z+39)<5  && x<80 && x>-80) return false;             /* pole line */
     if(x>LOT.x0-pad&&x<LOT.x1+pad&&z>LOT.z0-pad&&z<LOT.z1+pad) return false;
+    if(dist2(x,z,-15,11)<13.5) return false;                         /* the diamond */
     return true;
   }
   for(i=0;i<36;i++){                                    /* saguaros */
@@ -1171,6 +1192,7 @@ function drawDriver(c,B,o){
   }
 
   /* ── shoulders, and whatever the hands are doing ──────────────────────── */
+  if(DRV_STAND) return;                    /* the standing rig draws its own body */
   drvCBox(hxo, 1.196, hzo+0.02, 0.292, 0.026, 0.132, shirt);        /* shoulders */
   drvCBox(hxo, 1.222, hzo+0.02, 0.196, 0.026, 0.122, shirt);
   if(st===1){                                     /* the fare, held up to be taken */
@@ -1291,7 +1313,9 @@ var TOOLS = [
   { id:'spray',  key:'5', name:'SPRAY',  g:'&#127912;', owned:false, price:180,
     d:'A can of paint. Respray a panel. Any panel. Any colour.' },
   { id:'lighter',key:'6', name:'LIGHTER',g:'&#128293;', owned:false, price:260,
-    d:'For lighting things. Fuel is a thing. Think it through.' }
+    d:'For lighting things. Fuel is a thing. Think it through.' },
+  { id:'bat',    key:'7', name:'BAT',    g:'&#9918;',    owned:false, price:0, hidden:true,
+    d:'Buford\u2019s bat. Swing with the mouse. G puts it down.' }
 ];
 var tool = 'hands', heldNozzle = null, holster = false;
 function toolById(id){ for(var i=0;i<TOOLS.length;i++) if(TOOLS[i].id===id) return TOOLS[i]; return null; }
@@ -1322,6 +1346,7 @@ function allHotspots(){
   }
   out.push({ kind:'alarm', x:SHOP.x-SHOP.w/2-0.14, y:1.35, z:SHOP.z+2.5, r:0.42 });
   if(truck.here) out.push({ kind:'truck', x:TRUCKBAY.x-1.6, y:1.3, z:TRUCKBAY.z, r:1.5 });
+  bgHotspots(out);
   return out;
 }
 /* what is the crosshair on? nearest hotspot inside a narrow cone */
@@ -1345,6 +1370,7 @@ function updateAim(){
 /* ── what does the held tool do to that hotspot? ─────────────────────────── */
 function actionFor(h){
   if(!h) return null;
+  if(h.kind==='bgtalk'||h.kind==='bgball'||h.kind==='bgbat') return bgAction(h);
   if(h.kind==='holster') return heldNozzle ? { t:'Put the nozzle back' } : { t:'Take the '+GRADES[h.grade].name+' nozzle' };
   if(h.kind==='alarm')   return { t: sheriffCase ? 'Call the sheriff' : 'Nothing to report' };
   if(h.kind==='truck')   return { t:'Browse the delivery truck' };
@@ -1392,7 +1418,12 @@ function driverLine(c){
 var pumping = null, spillTimer=0;
 function pressUse(){
   var h=aim, a=actionFor(h);
-  if(!h||!a) return;
+  if(h && a && (h.kind==='bgtalk'||h.kind==='bgball'||h.kind==='bgbat')){ bgPress(h); return; }
+  if(!h||!a){
+    if(bgHasBat()) bgSwing();
+    else if(BB.st==='held') bgThrow();
+    return;
+  }
   if(h.kind==='holster'){
     if(heldNozzle) { heldNozzle=null; stopPump(); }
     else { heldNozzle={ pump:h.pump, grade:h.grade }; tool='nozzle'; syncBelt(); }
@@ -1543,7 +1574,7 @@ function drawHeld(){
   /* fist / open-hand poses:  [f0,f1,f2,f3, thumb, thumbYaw, spread] */
   var FIST = [1.15,1.20,1.20,1.15, 1.05, 0.0, 0.0];
   var OPEN = [0.22,0.16,0.18,0.26, 0.30, 0.30, 0.20];
-  var pose, hx,hy,hz, hyaw,hpit,hrol, grip=0, ay=-0.52, ap=0.62;
+  var pose, hx,hy,hz, hyaw,hpit,hrol, grip=0, ay=-0.52, ap=0.62, hdist=1;
 
   if(heldNozzle){                                     /* ── pistol grip ── */
     pose = [0.16,1.22,1.26,1.22, 1.10, -0.10, 0.0];   /* trigger finger out */
@@ -1556,6 +1587,22 @@ function drawHeld(){
     hx = 0.234+sway + osc*0.078; hy = -0.205+bob+idle - hndHold*0.035;
     hz = 0.520 + jab*0.08 + Math.abs(osc)*0.03;
     hyaw = -0.685+idle2*0.08 + osc*0.24; hpit = 0.700 - hndHold*0.16; hrol = -2.283+osc*0.18;
+  } else if(tool==='bat'){                             /* ── two fists, long ── */
+    /* The tool grows along -Bh.r, and that direction depends only on hyaw and
+       hrol — the grip's spin turns the hand about the shaft, not the shaft.
+       So the swing is a yaw sweep: cocked up and right at rest, coming level
+       and round to the left through the ball. */
+    pose = FIST;
+    var sp = swingT>0 ? 1-swingT/0.40 : 0;
+    var sw = swingT>0 ? Math.sin(sp*PI) : 0;
+    hx = 0.330 - sw*0.20 + sway;
+    hy = -0.360 + bob + idle + sw*0.13;
+    hz = 0.545 + sw*0.20;
+    hdist = 1.34;                     /* a bat is held further out than a wrench */
+    grip=1;
+    hyaw = (swingT>0 ? 2.25 - sp*1.30 : 2.35) + idle2*0.05;
+    hrol = (swingT>0 ? -0.78 + sw*0.72 : -0.95);
+    hpit = 3.30 + sw*1.10;
   } else if(tool==='wrench'){                          /* ── two fists ── */
     pose = FIST;
     hx = 0.270+sway; hy = -0.252+bob+idle; hz = 0.555 + jab*0.07;
@@ -1579,13 +1626,13 @@ function drawHeld(){
      the hand at the same point on screen and shrinks it by 1/HND_D, which is
      what we want — the FOV here is wide enough that a hand placed half a metre
      out fills a quarter of the frame. */
-  hx *= HND_D*HND_OX; hy *= HND_D*HND_OY; hz *= HND_D;
+  hx *= HND_D*HND_OX*hdist; hy *= HND_D*HND_OY*hdist; hz *= HND_D*hdist;
   var oH = ptOf(Bc,o, hx,hy,hz);
   var Bh = grip ? hndGripB(Bc, hyaw, hrol, hpit) : hndRotB(Bc, hyaw, hpit, hrol);
   var Ba = hndRotB(Bc, ay, ap, 0);           /* forearm — always bottom-right */
 
   /* second hand for the heavy two-handed tool */
-  if(tool==='wrench'){
+  if(tool==='wrench' || tool==='bat'){
     /* the off hand rides the same shaft, one fist further along it */
     var GY2=-0.066*HND_S, GZ2=0.080*HND_S;
     var BL = hndRotB(Bh, 0, 0, 0.34);
@@ -1771,7 +1818,7 @@ function openTruck(){
   var opts=[];
   for(var i=0;i<TOOLS.length;i++){
     (function(T){
-      if(T.owned) return;
+      if(T.owned || T.hidden) return;      /* Buford's bat is not stock */
       opts.push({ t:T.name.charAt(0)+T.name.slice(1).toLowerCase(), right:'$'+T.price, d:T.d,
         dis: cash<T.price,
         fn:function(){ cash-=T.price; T.owned=true; syncBelt(); syncHUD(); openTruck();
@@ -1841,6 +1888,534 @@ function updateSpawn(dt){
   }
 }
 /* ═══════════════════════════════════════════════════════════════════════════
+   10. THE BALL GAME
+   A man turns up on foot with a bat over his shoulder and asks whether you
+   play. Everything after that is up to you: hit the ball, run the bases, or
+   keep hold of the bat and find out what else it is good for.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* the diamond, scratched into the sand west of the forecourt. The batter
+   stands at home and faces +z, so first base is on their right.            */
+var BF = {
+  hx:-15, hz:4,                 /* home plate            */
+  mx:-15, mz:10.7,              /* the mound             */
+  cx:-15, cz:11.07,             /* infield centre        */
+  B:[ [-7.93,11.07], [-15,18.14], [-22.07,11.07], [-15,4] ],
+  names:['first','second','third','home']
+};
+
+var BG = {                      /* the man himself */
+  st:'gone', x:24, z:-24, yaw:0, tx:0, tz:0, t:0,
+  moving:false, anim:0, hasBall:true, hasBat:true,
+  bonks:0, sore:0, wind:0, down:0,
+  face:{ seed:481207, hat:{ c:[196,62,54], n:'ball cap' }, x:0, z:0, bob:0.7,
+         mood:1, served:false, angry:0, onFire:0, impatient:false, fugitive:false,
+         hatName:'ball cap' }
+};
+var BB = { st:'none', x:0, y:0, z:0, px:0, py:0, pz:0, vx:0, vy:0, vz:0, t:0 };
+var BGM = { on:false, strikes:0, runs:0, hits:0, outs:0, next:0, live:false,
+            msg:'', msgT:0, batWarn:0 };
+var BAT = { lent:false, down:null };
+var bgSpawnT = 24, swingT = 0, swingHit = false, bgHudT = 0;
+
+function bgHasBat(){ return BAT.lent && !BAT.down && tool==='bat'; }
+function bgMsg(s,t){ BGM.msg=s; BGM.msgT=t||2.4; }
+function bgLook(x,z){ BG.yaw = Math.atan2(x-BG.x, z-BG.z); }
+
+/* ── the man ─────────────────────────────────────────────────────────────── */
+function bgArrive(){
+  BG.st='arriving'; BG.x=-23; BG.z=-27; BG.yaw=0; BG.t=0;
+  BG.tx=-9.4; BG.tz=2.6; BG.hasBall=true; BG.hasBat=true; BG.sore=0; BG.down=0;
+}
+function bgLeave(msg){
+  BG.st='leaving'; BG.t=0; BG.tx=-24; BG.tz=-28; BG.down=0;
+  bgClose(); if(msg) toast(msg);
+}
+function bgWalk(dt,spd){
+  var dx=BG.tx-BG.x, dz=BG.tz-BG.z, d=Math.sqrt(dx*dx+dz*dz);
+  if(d<0.14) return true;
+  var s=Math.min(spd*dt, d);
+  BG.x+=dx/d*s; BG.z+=dz/d*s;
+  BG.yaw=Math.atan2(dx,dz);
+  BG.anim+=s*2.9; BG.moving=true;
+  return false;
+}
+
+function bgUpdate(dt){
+  if(BGM.msgT>0) BGM.msgT-=dt;
+  if(BGM.batWarn>0) BGM.batWarn-=dt;
+  if(BG.st==='gone'){
+    if(bgSpawnT>0){ bgSpawnT-=dt; if(bgSpawnT<=0) bgArrive(); }
+    return;
+  }
+  BG.t+=dt; BG.moving=false;
+  BG.face.x=BG.x; BG.face.z=BG.z;
+  BG.face.angry=BG.sore; BG.face.mood=BG.sore>0.05?0.2:1;
+  if(BG.sore>0) BG.sore=Math.max(0, BG.sore-dt*0.09);
+
+  if(BG.st==='arriving'){
+    if(bgWalk(dt,2.6)){ BG.st='offer'; BG.t=0; bgLook(camX,camZ);
+      toast('Buford Hobbs: “Say — you play ball?”'); }
+
+  } else if(BG.st==='offer'){
+    bgLook(camX,camZ);
+    if(BG.t>300) bgLeave('Buford got bored of waiting and wandered off');
+
+  } else if(BG.st==='walkout'){
+    if(bgWalk(dt,2.9)){ BG.st='ready'; BG.t=0; toast('Buford: “Get in the box.”'); }
+
+  } else if(BG.st==='ready'){
+    bgLook(BF.hx,BF.hz);
+    if(BG.t>1.1 && BG.hasBall && bgHasBat() && dist2(camX,camZ,BF.hx,BF.hz)<4.2){
+      BG.st='wind'; BG.t=0;
+    }
+
+  } else if(BG.st==='wind'){
+    bgLook(BF.hx,BF.hz);
+    BG.wind=clamp(BG.t/0.95,0,1);
+    if(BG.t>=0.95) bgPitch();
+
+  } else if(BG.st==='watch'){
+    BG.wind=0;
+    bgLook(BB.st==='none'?camX:BB.x, BB.st==='none'?camZ:BB.z);
+    if(BGM.live){ BG.st='chase'; BG.t=0; }
+    else if(BB.st==='loose' || BB.st==='held'){ BG.st='await'; BG.t=0; }
+
+  } else if(BG.st==='chase'){
+    if(BB.st==='held' || BB.st==='thrown'){ BG.st='await'; BG.t=0; }
+    else {
+      BG.tx=BB.x; BG.tz=BB.z;
+      bgWalk(dt,3.5);
+      if(BB.st==='loose' && dist2(BG.x,BG.z,BB.x,BB.z)<1.1){
+        BG.hasBall=true; BB.st='his'; BG.st='return'; BG.t=0;
+      }
+    }
+
+  } else if(BG.st==='return'){
+    BG.tx=BF.mx; BG.tz=BF.mz;
+    if(bgWalk(dt,3.3)){
+      if(BGM.live) bgOut('Buford has the ball back on the mound. You are out.');
+      BG.st='ready'; BG.t=0;
+    }
+
+  } else if(BG.st==='await'){
+    BG.tx=BF.mx; BG.tz=BF.mz;
+    if(!bgWalk(dt,2.6)) bgLook(BB.x,BB.z); else bgLook(camX,camZ);
+    if(BB.st==='loose' && dist2(BG.x,BG.z,BB.x,BB.z)<1.7){
+      BG.hasBall=true; BB.st='his'; BG.st='ready'; BG.t=0;
+    } else if(BG.t>17 && BB.st==='loose'){ BG.st='chase'; BG.t=0; }
+
+  } else if(BG.st==='hurt'){
+    BG.down=Math.min(1, BG.down+dt*4);
+    if(BG.t>3.6) bgLeave(null);
+
+  } else if(BG.st==='leaving'){
+    BG.down=Math.max(0, BG.down-dt*3);
+    if(bgWalk(dt,2.7)){ BG.st='gone'; bgSpawnT=200; }
+  }
+
+  bgRunTick(dt);
+}
+
+/* ── the offer, and calling it off ───────────────────────────────────────── */
+function bgTalk(){
+  if(BG.st==='offer'){
+    showSheet('Buford Hobbs',
+      '“Pump ain’t going anywhere. I got a bat and a ball and nobody to throw to.”',
+      [ { t:'Alright — let’s play', d:'He heads out past the lot and marks out a diamond.',
+          fn:function(){ closeSheet(); bgStart(); } },
+        { t:'Not right now', d:'He will be around a while yet.',
+          fn:function(){ closeSheet(); toast('Buford: “Suit yourself. I’ll be here.”'); } } ]);
+    return;
+  }
+  showSheet('Buford Hobbs',
+    'Runs ' + BGM.runs + ' &middot; hits ' + BGM.hits + ' &middot; outs ' + BGM.outs,
+    [ { t:'Keep playing', fn:function(){ closeSheet(); } },
+      { t:'That’s enough for today', d:'He takes his bat back and hangs around the pumps.',
+        fn:function(){ closeSheet(); bgStop('Buford: “Good arm on you. Same time tomorrow.”'); } } ]);
+}
+function bgStart(){
+  BGM.on=true; BGM.strikes=0; BGM.outs=0; BGM.next=0; BGM.live=false;
+  BAT.lent=true; BAT.down=null;
+  toolById('bat').owned=true; tool='bat'; holster=false;
+  if(heldNozzle){ heldNozzle=null; stopPump(); }
+  syncBelt();
+  BG.st='walkout'; BG.t=0; BG.tx=BF.mx; BG.tz=BF.mz; BG.hasBat=false; BG.hasBall=true;
+  BB.st='his';
+  toast('Buford hands you the bat. Home plate is the white one — LMB swings, G drops it.');
+}
+function bgStop(msg){
+  bgClose(); if(msg) toast(msg);
+  if(BG.st!=='hurt' && BG.st!=='leaving'){ BG.st='offer'; BG.t=0; BG.tx=-9.4; BG.tz=2.6; }
+}
+function bgClose(){
+  BGM.on=false; BGM.live=false;
+  BAT.lent=false; BAT.down=null; BG.hasBat=true;
+  toolById('bat').owned=false;
+  if(tool==='bat') tool='hands';
+  if(BB.st==='held') BB.st='his';
+  syncBelt();
+}
+
+/* ── pitching, hitting, running ──────────────────────────────────────────── */
+function bgPitch(){
+  BG.hasBall=false; BG.st='watch'; BG.t=0; BG.wind=0;
+  var sx = BF.hx + rnd(-0.40,0.40);           /* he is not always around the plate */
+  var sy = 1.02 + rnd(-0.26,0.34);
+  var tt = dist2(BF.mx,BF.mz,sx,BF.hz) / rnd(9.4,12.0);
+  BB.st='pitch'; BB.x=BF.mx; BB.y=1.66; BB.z=BF.mz; BB.t=0; BB.counted=false;
+  BB.px=BB.x; BB.py=BB.y; BB.pz=BB.z;
+  BB.vx=(sx-BF.mx)/tt; BB.vz=(BF.hz-BF.mz)/tt;
+  BB.vy=(sy-1.66)/tt + 0.5*9.81*tt;
+  toast('Buford: “' + pick(['Here she comes.','Eyes up now.','Try this one.',
+                            'Straight down the middle.','No swinging at dirt.']) + '”');
+}
+function bgStrike(){
+  BGM.strikes++;
+  if(BGM.strikes>=3){
+    BGM.strikes=0; BGM.outs++;
+    bgMsg('Strike three — you’re out', 2.8);
+    toast('Buford: “' + pick(['Ho ho!','Sit down!','That’s three.']) + '”');
+  } else bgMsg('Strike ' + BGM.strikes, 1.8);
+}
+function bgOut(msg){
+  BGM.live=false; BGM.next=0; BGM.outs++;
+  bgMsg(msg, 3.0);
+  if(BGM.outs>=3){ BGM.outs=0; toast('Three away. Fresh innings.'); }
+}
+function bgRunTick(dt){
+  if(!BGM.on || !BGM.live) return;
+  var b=BF.B[BGM.next];
+  if(dist2(camX,camZ,b[0],b[1])>1.9) return;
+  if(bgHasBat()){
+    if(BGM.batWarn<=0){ BGM.batWarn=3.0;
+      toast('Buford: “The BAT! Put it down — press G — you can’t run with that!”'); }
+    return;
+  }
+  BGM.next++;
+  if(BGM.next>3){
+    BGM.runs++; BGM.next=0; BGM.live=false; cash+=12;
+    bgMsg('A run! +$12', 3.2); syncHUD();
+    toast('Buford: “' + pick(['Well I never.','That’s a run, that is.',
+                              'You can hit, I’ll give you that.']) + '”');
+  } else bgMsg('Safe at ' + BF.names[BGM.next-1] + ' — keep going', 2.0);
+}
+
+/* ── the swing ───────────────────────────────────────────────────────────── */
+function bgSegDist(ax,ay,az,bx,by,bz, px,py,pz){
+  var ex=bx-ax, ey=by-ay, ez=bz-az;
+  var L=ex*ex+ey*ey+ez*ez;
+  var t = L>1e-9 ? clamp(((px-ax)*ex+(py-ay)*ey+(pz-az)*ez)/L, 0, 1) : 0;
+  var dx=ax+ex*t-px, dy=ay+ey*t-py, dz=az+ez*t-pz;
+  return Math.sqrt(dx*dx+dy*dy+dz*dz);
+}
+function bgSwing(){ if(swingT<=0){ swingT=0.40; swingHit=false; } }
+function bgSwingPoint(p){
+  var a = -1.18 + p*2.42, yaw = camYaw + a, R = 1.14;
+  return [ camX + Math.sin(yaw)*R,
+           camY - 0.40 + Math.sin(camPitch)*1.15 - 0.14*Math.sin(p*PI),
+           camZ + Math.cos(yaw)*R, a ];
+}
+function bgSwingTick(dt){
+  if(swingT<=0) return;
+  swingT=Math.max(0, swingT-dt);
+  if(swingHit) return;
+  var p = 1 - swingT/0.40;
+  if(p<0.16 || p>0.88) return;
+  var S = bgSwingPoint(p), dx, dz;
+  /* the ball moves a third of a metre between frames, so meet it along the
+     line it travelled rather than wherever it happens to be sampled */
+  if(BB.st==='pitch' || BB.st==='hit' || BB.st==='loose' || BB.st==='thrown'){
+    if(bgSegDist(BB.px,BB.py,BB.pz, BB.x,BB.y,BB.z, S[0],S[1],S[2]) < 0.80){
+      swingHit=true; bgContact(p); return;
+    }
+  }
+  if(BG.st!=='gone' && BG.st!=='hurt' && BG.st!=='leaving'){
+    dx=BG.x-S[0]; dz=BG.z-S[2];
+    if(dx*dx+dz*dz < 0.95 && Math.abs(1.30-S[1])<1.15){ swingHit=true; bgWhack(); }
+  }
+}
+function bgContact(p){
+  var q = clamp(1 - Math.abs(p-0.5)/0.28, 0, 1);      /* 1 = squarely struck */
+  var loft = 0.14 + q*0.44, sp = 8 + q*20;
+  var dir = camYaw + (p-0.5)*1.7;
+  BB.st='hit'; BB.t=0;
+  BB.vx=Math.sin(dir)*Math.cos(loft)*sp;
+  BB.vz=Math.cos(dir)*Math.cos(loft)*sp;
+  BB.vy=Math.sin(loft)*sp;
+  BGM.hits++; BGM.strikes=0;
+  if(BGM.on){ BGM.live=true; BGM.next=0; bgMsg(q>0.72?'Crushed it — RUN!':'In play — RUN!', 2.4); }
+  for(var i=0;i<5;i++)
+    FX.push({ x:BB.x, y:BB.y, z:BB.z, vy:rnd(0.5,1.5), t:0, life:rnd(0.12,0.22),
+              r:rnd(0.025,0.048), col:[252,246,224], kind:'smoke' });
+}
+function bgWhack(){
+  BG.st='hurt'; BG.t=0; BG.down=0; BG.sore=1; BG.bonks+=3;
+  BB.st = BG.hasBall ? 'loose' : BB.st;
+  if(BG.hasBall){ BB.x=BG.x+rnd(-0.6,0.6); BB.y=0.08; BB.z=BG.z+rnd(-0.6,0.6);
+                  BB.vx=0; BB.vy=0; BB.vz=0; BG.hasBall=false; }
+  bgMsg('You hit Buford with the bat.', 3.4);
+  toast('Buford: “OW! What in the — you absolute —”');
+  ratings.push(1);
+  if(typeof reviewsGiven==='number') reviewsGiven++;
+  syncHUD();
+}
+function bgBonk(){
+  BG.bonks++; BG.sore=1;
+  if(BG.bonks>=3){
+    bgMsg('Buford has had enough of that.', 3.2);
+    toast('Buford: “Right. You keep the bat. I’m keeping the ball.”');
+    ratings.push(2); syncHUD();
+    bgLeave(null);
+  } else {
+    toast('Buford: “' + pick(['OI! In the ear!','That was my HEAD.',
+                              'Do that again and I go home.']) + '”');
+    BB.vx*=-0.2; BB.vz*=-0.2; BB.vy=1.4;
+  }
+}
+
+/* ── the ball ────────────────────────────────────────────────────────────── */
+function bgThrow(){
+  if(BB.st!=='held') return;
+  var sp=17.5;
+  BB.st='thrown'; BB.t=0;
+  BB.x=camX+fx*0.5; BB.y=camY-0.12+fy*0.5; BB.z=camZ+fz*0.5;
+  BB.px=BB.x; BB.py=BB.y; BB.pz=BB.z;
+  BB.vx=fx*sp; BB.vy=fy*sp+2.6; BB.vz=fz*sp;
+}
+function bbUpdate(dt){
+  if(BB.st==='none' || BB.st==='his') return;
+  if(BB.st==='held'){ BB.x=camX+fx*0.42; BB.y=camY-0.26; BB.z=camZ+fz*0.42; return; }
+  BB.t+=dt;
+  BB.px=BB.x; BB.py=BB.y; BB.pz=BB.z;
+  BB.vy-=9.81*dt;
+  BB.x+=BB.vx*dt; BB.y+=BB.vy*dt; BB.z+=BB.vz*dt;
+
+  /* a pitch that gets past the plate is a strike */
+  if(BB.st==='pitch' && BB.z < BF.hz-0.55){
+    BB.st='loose';
+    if(BGM.on && !BB.counted){ BB.counted=true; bgStrike(); }
+  }
+  /* a throw that finds him */
+  if(BB.st==='thrown' && BG.st!=='gone' && BG.st!=='hurt' && BG.st!=='leaving'){
+    var hd=bgSegDist(BB.px,BB.py,BB.pz, BB.x,BB.y,BB.z, BG.x,1.36,BG.z);
+    var fast=Math.sqrt(BB.vx*BB.vx+BB.vy*BB.vy+BB.vz*BB.vz);
+    if(hd<0.46 && fast>7){ BB.st='loose'; BB.x=BG.x; BB.z=BG.z; bgBonk(); }
+    else if(hd<1.6 && fast<14 && BB.t>0.15){
+      BB.st='his'; BG.hasBall=true;
+      if(BG.st==='await'||BG.st==='chase'){ BG.st='ready'; BG.t=0; }
+      toast('Buford: “' + pick(['Got it.','Attaboy.','Nice and easy.']) + '”');
+      return;
+    }
+  }
+  if(BB.y<0.075){
+    BB.y=0.075;
+    if(BB.vy < -0.7){ BB.vy=-BB.vy*0.40; BB.vx*=0.70; BB.vz*=0.70; }
+    else {
+      BB.vy=0;
+      var k=Math.max(0, 1-2.6*dt);
+      BB.vx*=k; BB.vz*=k;
+      if(Math.abs(BB.vx)+Math.abs(BB.vz)<0.30){ BB.vx=0; BB.vz=0; }
+    }
+    if(BB.st!=='loose') BB.st='loose';
+  }
+  if(BB.x<-40||BB.x>40||BB.z<-46||BB.z>40){
+    BB.st='loose'; BB.vx=0; BB.vz=0; BB.vy=0;
+    BB.x=clamp(BB.x,-38,38); BB.z=clamp(BB.z,-44,38); BB.y=0.075;
+  }
+}
+function bgDropBat(){
+  if(!BAT.lent || BAT.down) return;
+  BAT.down={ x:camX+fx*0.75, z:camZ+fz*0.75, yaw:camYaw+1.3 };
+  if(tool==='bat') tool='hands';
+  toolById('bat').owned=false; syncBelt();
+  toast('You put the bat down.');
+}
+function bgTakeBat(){
+  BAT.down=null; toolById('bat').owned=true; tool='bat'; holster=false; syncBelt();
+  toast('Bat in hand. LMB swings, G puts it down.');
+}
+
+/* ── what the crosshair can find out here ────────────────────────────────── */
+function bgHotspots(out){
+  if(BG.st!=='gone' && BG.st!=='leaving' && BG.st!=='hurt')
+    out.push({ kind:'bgtalk', x:BG.x, y:1.42, z:BG.z, r:0.72 });
+  if(BB.st==='loose')
+    out.push({ kind:'bgball', x:BB.x, y:BB.y+0.10, z:BB.z, r:0.46 });
+  if(BAT.down)
+    out.push({ kind:'bgbat', x:BAT.down.x, y:0.16, z:BAT.down.z, r:0.55 });
+}
+function bgAction(h){
+  if(h.kind==='bgtalk'){
+    if(bgHasBat()) return null;                 /* holding a bat? then you swing */
+    if(BG.st==='offer') return { t:'“Say — you play ball?”' };
+    if(BGM.on) return { t:'Talk to Buford' };
+    return null;
+  }
+  if(h.kind==='bgball'){
+    if(bgHasBat()) return { t:'Put the bat down first — G' };
+    return { t:'Pick up the ball' };
+  }
+  if(h.kind==='bgbat') return { t:'Pick up the bat' };
+  return null;
+}
+function bgPress(h){
+  if(h.kind==='bgtalk'){ bgTalk(); return; }
+  if(h.kind==='bgball'){ if(!bgHasBat()) BB.st='held'; return; }
+  if(h.kind==='bgbat'){ bgTakeBat(); return; }
+}
+
+/* ── drawing: the diamond ────────────────────────────────────────────────── */
+function bgDisc(x,z,r,col,alpha,y,segs){
+  var v=[], n=segs||14;
+  for(var i=0;i<n;i++){ var a=i/n*TAU; v.push(x+Math.cos(a)*r, y, z+Math.sin(a)*r); }
+  emitPoly(v, lit(col,0,1,0), { alpha:alpha, seam:false });
+}
+function drawBallField(){
+  if(!BGM.on && BG.st!=='walkout') return;
+  if(dist2(camX,camZ,BF.cx,BF.cz) > 62) return;
+  var DIRT=[164,120,78], CHALK=[214,210,196], BASE=[228,226,216];
+  /* the infield is a square stood on its corner */
+  groundQuad(BF.cx, BF.cz, 5.0, 5.0, PI/4, DIRT, 0.55, 0.0242);
+  bgDisc(BF.mx, BF.mz, 1.30, shade(DIRT,0.94), 0.75, 0.0246);
+  /* base paths */
+  groundQuad((BF.hx+BF.B[0][0])/2, (BF.hz+BF.B[0][1])/2, 0.34, 5.0,  PI/4, DIRT, 0.85, 0.0250);
+  groundQuad((BF.B[0][0]+BF.B[1][0])/2, (BF.B[0][1]+BF.B[1][1])/2, 0.34, 5.0, -PI/4, DIRT, 0.85, 0.0250);
+  groundQuad((BF.B[1][0]+BF.B[2][0])/2, (BF.B[1][1]+BF.B[2][1])/2, 0.34, 5.0,  PI/4, DIRT, 0.85, 0.0250);
+  groundQuad((BF.B[2][0]+BF.hx)/2, (BF.B[2][1]+BF.hz)/2, 0.34, 5.0, -PI/4, DIRT, 0.85, 0.0250);
+  /* foul lines, running out past first and third */
+  groundQuad(BF.hx+5.0, BF.hz+5.0, 0.07, 7.1,  PI/4, CHALK, 0.9, 0.0254);
+  groundQuad(BF.hx-5.0, BF.hz+5.0, 0.07, 7.1, -PI/4, CHALK, 0.9, 0.0254);
+  /* the bags, and home */
+  for(var i=0;i<3;i++){
+    var lit2 = BGM.live && BGM.next===i;
+    groundQuad(BF.B[i][0], BF.B[i][1], 0.34, 0.34, PI/4,
+               lit2?[250,226,120]:BASE, 1, 0.0258);
+  }
+  groundQuad(BF.hx, BF.hz, 0.36, 0.30, 0,
+             (BGM.live&&BGM.next===3)?[250,226,120]:[248,246,238], 1, 0.0258);
+  groundQuad(BF.hx, BF.hz-0.44, 0.36, 0.16, 0, CHALK, 0.8, 0.0256);
+}
+
+/* ── drawing: the man ────────────────────────────────────────────────────── */
+function bgLimb(o3, ax,ay,az, bx,by,bz, r, col, seg){
+  var dx=bx-ax, dy=by-ay, dz=bz-az, L=Math.sqrt(dx*dx+dy*dy+dz*dz)||1;
+  var Bo=basis(BG.yaw,0,0);
+  var Bl=basis(BG.yaw+Math.atan2(dx,dz), Math.asin(clamp(dy/L,-1,1)), 0);
+  var mid=ptOf(Bo,o3,(ax+bx)/2,(ay+by)/2,(az+bz)/2);
+  meshPrismB(Bl, mid, 0,0,0, r, L/2, seg||6, 'z', col, col, 1);
+}
+function bgArm(o3, side, hx,hy,hz, sleeve, skin){
+  var sx=side*0.215, sy=1.38, sz=0;
+  var mx=(sx+hx)/2 + side*0.07, my=(sy+hy)/2-0.05, mz=(sz+hz)/2;
+  bgLimb(o3, sx,sy,sz, mx,my,mz, 0.068, sleeve);
+  bgLimb(o3, mx,my,mz, hx,hy,hz, 0.055, skin);
+}
+function bgBatMesh(Bx,ox, len,scale,col){
+  meshPrismB(Bx,ox, 0,0,-0.02*scale, 0.022*scale, 0.030*scale, 6,'z', [64,54,44], [64,54,44], 1);
+  meshPrismB(Bx,ox, 0,0, len*0.26,   0.019*scale, len*0.26, 6,'z', shade(col,0.93), null, 1.42);
+  meshPrismB(Bx,ox, 0,0, len*0.76,   0.029*scale, len*0.24, 7,'z', col, col, 0.90);
+}
+function drawBallGuy(){
+  if(BG.st==='gone') return;
+  var d=dist2(BG.x,BG.z,camX,camZ);
+  if(d>72) return;
+  if(d>4 && ((BG.x-camX)*fx+(BG.z-camZ)*fz)/d < -0.25) return;
+
+  var B=basis(BG.yaw,0,0), o=[BG.x,0,BG.z];
+  var JER=[240,236,226], TRIM=[186,58,50], PANT=[96,108,138], SHOE=[48,50,58];
+  var SKIN=[228,176,138];
+  var lean = BG.down*0.9;                       /* flat on his back, briefly */
+  var stride = BG.moving ? Math.sin(BG.anim)*0.26 : 0;
+  var lift = 1 - lean*0.62;
+
+  setAO(0,1.9);
+  /* legs */
+  for(var i=-1;i<=1;i+=2){
+    var f=(i>0?stride:-stride);
+    bgLimb(o, i*0.115, 0.86*lift, 0, i*0.125, 0.44*lift, f*0.5, 0.088, PANT);
+    bgLimb(o, i*0.125, 0.44*lift, f*0.5, i*0.130, 0.09*lift, f*0.95, 0.072, PANT);
+    drawBox(B,o, i*0.130, 0.05*lift, f*0.95+0.05, 0.095, 0.05, 0.155, SHOE);
+  }
+  /* torso, belt, a number on the back */
+  meshPrismB(B,o, 0, 1.14*lift, 0, 0.215, 0.28*lift, 8,'y', JER, null, 0.90);
+  drawBox(B,o, 0, 0.885*lift, 0, 0.196, 0.045, 0.150, [56,58,68]);
+  drawBox(B,o, 0, 1.20*lift, 0.208, 0.075, 0.095, 0.012, TRIM);
+  drawBox(B,o, 0, 1.24*lift, -0.206, 0.016, 0.135, 0.010, TRIM);
+
+  /* arms — where the hands go depends on what he is doing */
+  var hL, hR;
+  if(BG.st==='hurt'){
+    hL=[-0.44, 1.02*lift, -0.10]; hR=[0.44, 1.02*lift, -0.10];
+  } else if(BG.st==='wind'){
+    var w=BG.wind;
+    hR=[ 0.16+0.30*Math.sin(w*PI), 1.30+0.52*w, -0.26-0.44*w ];
+    hL=[-0.30-0.16*w, 1.34+0.30*w, 0.10+0.40*w ];
+  } else if(BG.st==='watch' || BG.st==='await'){
+    var bk=BG.st==='await' ? 0.16*Math.sin(gTime*4) : 0;
+    hL=[-0.34, 1.16, -0.20]; hR=[0.34, 1.20+bk, -0.30-bk];
+  } else if(BG.hasBat){
+    hL=[-0.30, 1.10, -0.10]; hR=[0.24, 1.52, 0.02];         /* bat on the shoulder */
+  } else {
+    var sw=BG.moving ? Math.sin(BG.anim)*0.20 : 0.02*Math.sin(gTime*1.3);
+    hL=[-0.32, 1.10, -sw]; hR=[0.32, 1.10, sw];
+  }
+  bgArm(o,-1, hL[0],hL[1],hL[2], JER, SKIN);
+  bgArm(o, 1, hR[0],hR[1],hR[2], JER, SKIN);
+
+  /* what he is holding */
+  if(BG.hasBat && BG.st!=='hurt'){
+    var Bb=basis(BG.yaw+PI+0.34, 1.16, 0);           /* shouldered, leaning back */
+    bgBatMesh(Bb, ptOf(B,o, hR[0],hR[1],hR[2]), 0.80, 1, [198,152,96]);
+  }
+  if(BG.hasBall){
+    var bp=ptOf(B,o, hL[0],hL[1]-0.03,hL[2]+0.07);
+    meshBlobB(basis(0,0,0),bp, 0,0,0, 0.048,0.048,0.048, 3, [246,244,236], 1, 0.02);
+  }
+  clearAO();
+
+  /* The head comes off the same rig as the drivers'. A driver faces the car's
+     -z, so the rig has to be turned about-face to sit on a body whose forward
+     is +z, and the origin placed so the head lands on top of the neck. */
+  var Bh=basis(BG.yaw+PI,0,0), hy2=(BG.st==='hurt' ? 0.54 : 1.615*lift);
+  var oh=[ BG.x + 0.28*Bh.r[0] + 0.80*Bh.f[0],
+           hy2 - 1.398,
+           BG.z + 0.28*Bh.r[2] + 0.80*Bh.f[2] ];
+  DRV_STAND=1; drawDriver(BG.face, Bh, oh); DRV_STAND=0;
+}
+
+/* ── drawing: the loose ball, the dropped bat, the bubble ────────────────── */
+function drawBallProps(){
+  if(BAT.down){
+    var Bd=basis(BAT.down.yaw, 0, 0);
+    bgBatMesh(Bd, [BAT.down.x, 0.050, BAT.down.z], 0.80, 1, [198,152,96]);
+  }
+  if(BB.st==='pitch'||BB.st==='hit'||BB.st==='loose'||BB.st==='thrown'){
+    sprite(BB.x, BB.y, BB.z, function(sx,sy,sc){
+      var r=sc*0.048; if(r<0.7) return;
+      ctx.beginPath(); ctx.arc(sx,sy,r,0,TAU);
+      ctx.fillStyle='#f7f5ec'; ctx.fill();
+      ctx.lineWidth=Math.max(0.7,r*0.13); ctx.strokeStyle='#b9b3a2'; ctx.stroke();
+      if(r>3){
+        ctx.strokeStyle='#d1533f'; ctx.lineWidth=Math.max(0.7,r*0.15);
+        ctx.beginPath(); ctx.arc(sx-r*0.55, sy, r*0.86, -0.9, 0.9); ctx.stroke();
+        ctx.beginPath(); ctx.arc(sx+r*0.55, sy, r*0.86, PI-0.9, PI+0.9); ctx.stroke();
+      }
+    }, -0.05);
+  }
+  /* he wants you to know he has a bat */
+  if(BG.st==='offer' && dist2(BG.x,BG.z,camX,camZ)<17){
+    if(project(BG.x, 2.34, BG.z) && _px>-160 && _px<W+160){
+      var sx=_px, sy=_py, dd=_pd, sc=_ps;
+      pushLabel(function(g,u){
+        hndBubble(g, sx*u, sy*u, clamp(sc*0.30,34,92)*u, 'bat', [212,152,72],
+                  clamp(1-(dd-13)/5, 0.3, 1), 1);
+      });
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    7. INPUT — pointer lock, walking, tool select
    ═══════════════════════════════════════════════════════════════════════════ */
 var K={}, mouseDown=false, locked=false, gTime=0, bobT=0, sheetOpen=false;
@@ -1850,9 +2425,12 @@ window.addEventListener('keydown', function(e){
   if(sheetOpen) return;
   if(e.code==='KeyE') pressUse();
   if(e.code==='KeyQ'){ holster=!holster; if(holster&&pumping) stopPump(); syncBelt(); }
+  if(e.code==='KeyG') bgDropBat();
   for(var i=0;i<TOOLS.length;i++){
     if(e.code==='Digit'+TOOLS[i].key){
-      if(!TOOLS[i].owned){ toast('You do not own the '+TOOLS[i].name.toLowerCase()+' yet'); break; }
+      if(!TOOLS[i].owned){ toast(TOOLS[i].id==='bat'
+        ? (BAT.lent ? 'The bat is on the ground where you left it' : 'You have not got a bat')
+        : 'You do not own the '+TOOLS[i].name.toLowerCase()+' yet'); break; }
       if(TOOLS[i].id!=='nozzle' && heldNozzle){ heldNozzle=null; stopPump(); }
       tool=TOOLS[i].id; holster=false; syncBelt(); break;
     }
@@ -1883,7 +2461,7 @@ function walk(dt){
   var run = K['ShiftLeft']||K['ShiftRight'] ? 1.7 : 1;
   if(mx||mz){
     var m=Math.sqrt(mx*mx+mz*mz); mx/=m; mz/=m;
-    var sp=2.9*run*dt;
+    var sp=2.9*run*dt*(bgHasBat()?0.72:1);
     var nx2 = camX + (Math.sin(camYaw)*mz + Math.cos(camYaw)*mx)*sp;
     var nz2 = camZ + (Math.cos(camYaw)*mz - Math.sin(camYaw)*mx)*sp;
     /* keep out of solid things */
@@ -1922,6 +2500,7 @@ function syncBelt(){
   var el=document.getElementById('belt'), html='';
   for(var i=0;i<TOOLS.length;i++){
     var T=TOOLS[i];
+    if(T.hidden && !T.owned) continue;
     var on = !holster && (T.id===tool || (T.id==='nozzle'&&heldNozzle));
     html += '<div class="slot'+(T.owned?' have':'')+(on?' on':'')+'"><span class="k">'+T.key+'</span>'+
             '<span class="g">'+T.g+'</span><span class="n">'+T.name+'</span></div>';
@@ -1977,6 +2556,18 @@ function updateHUD(dt){
     var z=document.getElementById('pumpZone');
     z.style.left = clamp((want-1)/span,0,1)*100+'%';
     z.style.width = clamp(2/span,0,1)*100+'%';
+  }
+  /* the scoreboard, such as it is */
+  document.body.classList.toggle('hasBall', BGM.on);
+  if(BGM.on){
+    var dots='';
+    for(var s3=0;s3<3;s3++) dots += (s3<BGM.strikes?'\u25cf':'\u25cb');
+    document.getElementById('ballLine').innerHTML =
+      'Runs <b>'+BGM.runs+'</b> &nbsp; hits <b>'+BGM.hits+'</b> &nbsp; outs <b>'+BGM.outs+'</b>'+
+      '<br>strikes <span class="dots">'+dots+'</span>'+
+      (BGM.live ? '<br>running to <b>'+BF.names[BGM.next]+'</b>' :
+       (bgHasBat() ? '<br>LMB swing &middot; G drop bat' : '<br>press 7 for the bat'));
+    document.getElementById('ballMsg').textContent = BGM.msgT>0 ? BGM.msg : '';
   }
   hudT-=dt;
   if(hudT<=0){ hudT=0.2; syncHUD(); syncOrder(); }
@@ -2543,6 +3134,8 @@ function drvBiasFor(hx,hy,hz){
   var lz=dx*DRV_B.f[0]+dy*DRV_B.f[1]+dz*DRV_B.f[2];
   var ex=lx-hx, ey=ly-hy, ez=lz-hz;
   var L=Math.sqrt(ex*ex+ey*ey+ez*ez)||1; ex/=L; ey/=L; ez/=L;
+  /* a figure standing in the open has no cabin shell to climb out from behind */
+  if(DRV_STAND){ DRV_EX=ex; DRV_EY=ey; DRV_EZ=ez; return 0; }
   var t=9;
   if(Math.abs(ex)>1e-4) t=Math.min(t, ((ex>0?0.82:-0.82)-hx)/ex);
   if(Math.abs(ey)>1e-4) t=Math.min(t, ((ey>0?1.74:0.96)-hy)/ey);
@@ -2714,6 +3307,12 @@ function hndTool(Bh,oH, jab, osc, pump){
     var sq = 1 - hndHold*0.26;
     drawBox(Bh,oH, 0, GY+0.026*S, GZ-0.012*S, 0.070*S, 0.044*S*sq, 0.058*S, [246,214,88]);
     drawBox(Bh,oH, 0, GY-0.014*S, GZ-0.012*S, 0.046*S, 0.014*S, 0.036*S, [74,166,146]);
+  } else if(tool==='bat'){
+    var wd=[206,160,102], wd2=[176,128,74];
+    drawBox(Bh,oH,  0.060*S,GY,GZ, 0.018*S,0.030*S,0.028*S, [72,58,46]);          /* knob   */
+    meshPrismB(Bh,oH, -0.120*S,GY,GZ, 0.020*S, 0.175*S, 6,'x', wd2, null, 1.12);  /* handle */
+    meshPrismB(Bh,oH, -0.370*S,GY,GZ, 0.023*S, 0.080*S, 7,'x', wd,  null, 1.30);  /* taper  */
+    meshPrismB(Bh,oH, -0.560*S,GY,GZ, 0.030*S, 0.112*S, 7,'x', wd,  wd,  0.94);   /* barrel */
   } else if(tool==='wrench'){
     var st=[194,202,214], st2=[150,158,172];
     meshPrismB(Bh,oH, -0.118*S,GY,GZ, 0.029*S, 0.186*S, 5,'x', st, null, 1.0);   /* shaft */
@@ -2734,6 +3333,10 @@ function hndTool(Bh,oH, jab, osc, pump){
       FX.push({ x:fp[0], y:fp[1], z:fp[2], vy:0.55, t:0, life:0.24, r:0.026,
                 col:[255,208,80], kind:'fire' });
     }
+  } else if(BB.st==='held'){
+    /* a baseball, cupped */
+    meshBlobB(Bh,oH, 0.030*S,GY+0.020*S,GZ+0.040*S, 0.052*S,0.052*S,0.052*S, 3,
+              [246,244,236], 1, 0.02);
   } else if(aim && aim.kind==='driver' && aim.car && aim.car.served){
     /* a pinched banknote */
     drawBox(Bh,oH, 0.026*S,GY+0.010*S,GZ+0.055*S, 0.070*S,0.005,0.044*S, [126,196,132]);
@@ -2835,6 +3438,18 @@ function hndBubbleIcon(g, ico, X, Y, s, col){
     g.stroke();
     g.fillStyle=css(col);
     g.beginPath(); roundRect(g,20,-40,26,18,7); g.fill();            /* nozzle  */
+  } else if(ico==='bat'){                                 /* a bat and a ball */
+    g.save(); g.rotate(-0.62);
+    g.beginPath(); roundRect(g,-52,-9,44,18,9); g.fill();            /* handle */
+    g.beginPath(); roundRect(g,-58,-13,12,26,6); g.fill();           /* knob   */
+    g.beginPath(); g.moveTo(-10,-10); g.lineTo(44,-19);
+    g.quadraticCurveTo(58,0, 44,19); g.lineTo(-10,10); g.closePath(); g.fill();
+    g.restore();
+    g.beginPath(); g.arc(30,30,20,0,TAU); g.fill();                  /* ball   */
+    g.strokeStyle='#fff'; g.lineWidth=5;
+    g.beginPath(); g.arc(18,30,17,-0.85,0.85); g.stroke();
+    g.beginPath(); g.arc(42,30,17,PI-0.85,PI+0.85); g.stroke();
+    g.strokeStyle=css(col);
   } else if(ico==='sponge'){
     g.beginPath(); roundRect(g,-46,-16,92,50,16); g.fill();          /* sponge */
     g.fillStyle=css(mixc(col,[255,255,255],0.42));
@@ -2935,11 +3550,14 @@ function render(){
   drawClouds();
   DLn=0;
   drawGround();
+  drawBallField();
   drawShadows();
   flush();                       /* ground layer: floor, decals, shadows */
   drawStation();
   drawTruck();
   for(var i=0;i<CARS.length;i++) drawCar(CARS[i]);
+  drawBallGuy();
+  drawBallProps();
   drawFX();
   drawHeld();
   queueBubbles();
@@ -2965,6 +3583,9 @@ function frame(now){
     updateSpawn(dt);
     updateTruck(dt);
     updateFX(dt);
+    bgUpdate(dt);
+    bbUpdate(dt);
+    bgSwingTick(dt);
     maybeSheriff(dt);
     sheriffBtnHot = !!sheriffCase;
     clockT+=dt;
