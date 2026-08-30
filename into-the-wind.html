@@ -692,7 +692,10 @@ function emitPoly(v3, col, opt) {
   if (maxx < 0 || minx > W || maxy < 0 || miny > H) return;
   if ((maxx - minx) * (maxy - miny) < (pixelMode ? 1.2 : 5)) return;
   var depth = (opt && opt.depth) || zsum / k;
-  dlPush(depth, { p: pts, c: css(fogc(col, zsum / k)), s: !!(opt && opt.layer === 0), a: opt && opt.alpha },
+  /* `opt` may legitimately be null — drawRoof passes it — and `opt && opt.alpha`
+     is then null, not undefined, which flush() turns into globalAlpha = 0. */
+  dlPush(depth, { p: pts, c: css(fogc(col, zsum / k)), s: !!(opt && opt.layer === 0),
+                  a: (opt && opt.alpha !== undefined) ? opt.alpha : undefined },
          opt && opt.layer);
 }
 /* project a single point; returns false when behind the camera */
