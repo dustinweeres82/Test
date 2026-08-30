@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Fill 'Er Up! Gas Station Tycoon</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #111; font-family: 'Trebuchet MS', 'Segoe UI', sans-serif; }
+  canvas { display: block; position: fixed; top: 0; left: 0; width: 100%; height: 100%; touch-action: none; }
+  #rotate {
+    display: none;
+    position: fixed; inset: 0; background: #1a1a1a; color: #f0ece4;
+    flex-direction: column; align-items: center; justify-content: center;
+    font-size: 1.1rem; letter-spacing: 2px; z-index: 10;
+  }
+  #rotate span { font-size: 2.5rem; margin-bottom: 16px; }
+  @media (orientation: portrait) and (max-width: 600px) { #rotate { display: flex; } }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="rotate"><span>&#8635;</span>Rotate for best experience</div>
+<script>
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+
+// ── Viewport scaling ──────────────────────────────────────────────────────────
+var VW = 960, VH = 540;
+var scale = 1, offX = 0, offY = 0;
+
+function resize() {
+  var dpr = window.devicePixelRatio || 1;
+  var vw = window.innerWidth, vh = window.innerHeight;
+  canvas.width  = vw * dpr;
+  canvas.height = vh * dpr;
+  canvas.style.width  = vw + 'px';
+  canvas.style.height = vh + 'px';
+  scale = Math.min(vw / VW, vh / VH) * dpr;
+  offX  = (canvas.width  - VW * scale) / 2;
+  offY  = (canvas.height - VH * scale) / 2;
+}
+window.addEventListener('resize', resize);
+resize();
+
+function cpos(cx,cy){ var dpr=window.devicePixelRatio||1; return{x:((cx*dpr)-offX)/scale, y:((cy*dpr)-offY)/scale}; }
+function inB(p,b){ return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h; }
+function rr(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+function fmt(n){ return (n<0?'-$':'$')+Math.abs(Math.round(n)).toLocaleString(); }
+function fmt2(n){ return '$'+n.toFixed(2); }
+
+// ── Persistent high scores ──────────────────────────────────────────────────
+var SAVE_KEY='gasStationTycoonSave';
+var hi = {bestDay:0,bestCash:0};
+try{ var s=localStorage.getItem(SAVE_KEY); if(s) hi=JSON.parse(s); }catch(e){}
+function saveHi(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(hi)); }catch(e){} }
+
+// ── Game constants ────────────────────────────────────────────────────────────
+var WHOLESALE = 2.20;
+var DAY_LEN = 100;          // seconds per in-game day
+var SNACK_PRICE = 3.50;
+var ROAD_Y = 300;
+var ENTRY_X = 780;
+var PUMP_X = [420,520,620,720];
+var PUMP_Y = 360;
+var STORE = {x:40,y:190,w:150,h:150};
+var TANK_UI = {x:40,y:360,w:150,h:40};
+
+// ── Game state ────────────────────────────────────────────────────────────────
+var state = 'start'; // start, playing, shop, daysummary, gameover, paused
+var cash, day, dayTimer, marketPrice, price, reputation;
+var tankCap, tankGal, truckETA;
+var storeStock, storeCap;
+var pumpsUnlocked, attendants, tankLevel, adLevel, hasCashier;
+var pumps, cars, floaters, particles;
+var spawnTimer, rushUntil, rushTriggeredToday;
+var daySummary = null;
+var carSeq = 0;
+var carsServedTotal = 0;
+
+function newGame(){
+  cash = 300;
+  day = 1;
+  dayTimer = 0;
+  marketPrice = 3.10;
+  price = 2.99;
+  reputation = 60;
+  tankCap = 300; tankGal = 300; truckETA = 0;
+  storeStock = 25; storeCap = 100;
+  pumpsUnlocked = 2; attendants = 0; tankLevel = 0; adLevel = 0; hasCashier = false;
+  pumps = [];
+  for(var i=0;i<4;i++) pumps.push({x:PUMP_X[i],y:PUMP_Y,unlocked:i<pumpsUnlocked,car:null,fueling:false,progress:0,dur:1,noFuel:false});
+  cars = []; floaters = []; particles = [];
+  spawnTimer = 2;
+  rushUntil = 0; rushTriggeredToday = false;
+  carsServedTotal = 0;
+  daySummary = null;
+}
+newGame();
+
+function addFloat(x,y,text,color){ floaters.push({x:x,y:y,text:text,color:color,life:1.2}); }
+
+// ── Economy helpers ───────────────────────────────────────────────────────────
+function pumpUnlockCost(idx){ return idx===2?250:(idx===3?500:0); }
+function attendantCost(){ return 250 + attendants*200; }
+function tankUpgradeCost(){ return 200 + tankLevel*150; }
+function adCost(){ return 150 + adLevel*150; }
+var CASHIER_COST = 350;
+function dailyWages(){ return attendants*20 + (hasCashier?15:0); }
+function dailyRent(){ return 40 + pumpsUnlocked*15; }
+
+// ── Spawning & AI ─────────────────────────────────────────────────────────────
+function effectiveSpawnInterval(){
+  var base = clamp(3.2 - day*0.04, 1.0, 3.2);
+  var ratio = price / marketPrice;
+  var demandFactor = clamp(1 - (ratio-1)*1.8, 0.25, 1.5);
+  var repFactor = clamp(reputation/60, 0.4, 1.3);
+  var rushFactor = (dayTimer < rushUntil) ? 0.45 : 1;
+  return clamp(base / (demandFactor*repFactor) * rushFactor, 0.35, 8);
+}
+
+function spawnCar(){
+  carSeq++;
+  var hue = [ '#e74c3c','#3498db','#2ecc71','#f1c40f','#9b59b6','#e67e22','#1abc9c','#95a5a6' ][carSeq%8];
+  cars.push({
+    id:carSeq, x:VW+40, y:ROAD_Y, state:'approach', color:hue,
+    targetPump:-1, patience:18, wantsSnack: Math.random()<0.45,
+    gallons: 8+Math.random()*8, queueSlot:0
+  });
+}
+
+function freePumpIndex(){
+  for(var i=0;i<pumps.length;i++){ if(pumps[i].unlocked && !pumps[i].car) return i; }
+  return -1;
+}
+
+function updateCars(dt){
+  // approaching cars move left toward entry
+  var queued = [];
+  for(var i=0;i<cars.length;i++){
+    var c = cars[i];
+    if(c.state==='approach'){
+      c.x -= 90*dt;
+      if(c.x<=ENTRY_X){
+        c.x = ENTRY_X;
+        var fp = freePumpIndex();
+        if(fp>=0){ c.state='topump'; c.targetPump=fp; pumps[fp].car=c; }
+        else { c.state='queue'; }
+      }
+    } else if(c.state==='queue'){
+      queued.push(c);
+    } else if(c.state==='topump'){
+      var p = pumps[c.targetPump];
+      var tx = p.x, ty = p.y-38;
+      var dx=tx-c.x, dy=ty-c.y, dist=Math.sqrt(dx*dx+dy*dy);
+      if(dist<3){ c.x=tx; c.y=ty; c.state='parked'; p.progress=0; p.fueling=false; p.noFuel=false; }
+      else { c.x += dx/dist*140*dt; c.y += dy/dist*140*dt; }
+    } else if(c.state==='parked'){
+      var p2 = pumps[c.targetPump];
+      if(!p2.fueling){
+        if(tankGal < 5){ p2.noFuel=true; c.patience -= dt; }
+        else if(attendants>=1){ startFueling(c.targetPump); }
+      }
+      if(p2.fueling){
+        p2.dur = clamp(3.2/(1+attendants*0.18), 0.9, 3.2);
+        p2.progress += dt/p2.dur;
+        if(p2.progress>=1){ finishFueling(c.targetPump); }
+      }
+      if(p2.noFuel && c.patience<=0){
+        addFloat(c.x,c.y-20,'No fuel! 😠','#e74c3c'); reputation=clamp(reputation-4,0,100);
+        p2.car=null; p2.noFuel=false; cars.splice(i,1); i--; continue;
+      }
+    } else if(c.state==='leaving'){
+      c.x -= 160*dt; c.y += (ROAD_Y+40-c.y)*0.06;
+      if(c.x < -60){ cars.splice(i,1); i--; continue; }
+    }
+  }
+  // queue ordering: sort by arrival (id) then place slots behind entry
+  queued.sort(function(a,b){return a.id-b.id;});
+  for(var q=0;q<queued.length;q++){
+    var c2=queued[q];
+    var targetX = ENTRY_X + 60 + q*66;
+    c2.x += (targetX-c2.x)*Math.min(1,6*dt);
+    c2.patience -= dt;
+    if(c2.patience<=0){
+      addFloat(c2.x,c2.y-20,'Left in a huff 😠','#e74c3c');
+      reputation = clamp(reputation-4,0,100);
+      var idx = cars.indexOf(c2);
+      if(idx>=0) cars.splice(idx,1);
+      continue;
+    }
+    var fp2 = freePumpIndex();
+    if(fp2>=0){ c2.state='topump'; c2.targetPump=fp2; pumps[fp2].car=c2; }
+  }
+}
+
+function startFueling(pumpIdx){
+  var p = pumps[pumpIdx];
+  if(!p.car || p.fueling) return;
+  p.fueling = true; p.progress = 0;
+}
+
+function finishFueling(pumpIdx){
+  var p = pumps[pumpIdx];
+  var c = p.car;
+  var gal = Math.min(c.gallons, tankGal);
+  tankGal -= gal;
+  var revenue = gal*price;
+  cash += revenue;
+  addFloat(p.x,p.y-60, fmt2(revenue), '#2ecc71');
+  reputation = clamp(reputation+1,0,100);
+  carsServedTotal++;
+  if(c.wantsSnack && storeStock>0){
+    storeStock--; cash += SNACK_PRICE;
+    addFloat(STORE.x+STORE.w/2, STORE.y+20, '+'+fmt2(SNACK_PRICE)+' snack', '#f1c40f');
+  }
+  p.fueling=false; p.progress=0; p.car=null;
+  c.state='leaving';
+}
+
+// ── Fuel truck & store ────────────────────────────────────────────────────────
+function orderFuel(){
+  if(truckETA>0) return;
+  var need = tankCap - tankGal;
+  if(need<10) return;
+  var cost = need*WHOLESALE;
+  if(cash<cost) { addFloat(TANK_UI.x+60,TANK_UI.y-10,'Not enough cash!','#e74c3c'); return; }
+  cash -= cost;
+  truckETA = 14;
+  addFloat(TANK_UI.x+60,TANK_UI.y-10,'Truck en route...','#3498db');
+}
+function restock(){
+  var cost = 50;
+  if(storeStock>=storeCap){ return; }
+  if(cash<cost){ addFloat(STORE.x+STORE.w/2,STORE.y-10,'Not enough cash!','#e74c3c'); return; }
+  cash -= cost; storeStock = Math.min(storeCap, storeStock+25);
+  addFloat(STORE.x+STORE.w/2,STORE.y-10,'Restocked!','#2ecc71');
+}
+
+// ── Upgrades ──────────────────────────────────────────────────────────────────
+function buyPump(){
+  if(pumpsUnlocked>=4) return;
+  var cost = pumpUnlockCost(pumpsUnlocked);
+  if(cash<cost) return;
+  cash -= cost; pumps[pumpsUnlocked].unlocked = true; pumpsUnlocked++;
+}
+function buyAttendant(){
+  var cost = attendantCost();
+  if(cash<cost) return;
+  cash -= cost; attendants++;
+}
+function buyTank(){
+  if(tankLevel>=4) return;
+  var cost = tankUpgradeCost();
+  if(cash<cost) return;
+  cash -= cost; tankLevel++; tankCap += 400;
+}
+function buyAd(){
+  if(reputation>=100) return;
+  var cost = adCost();
+  if(cash<cost) return;
+  cash -= cost; adLevel++; reputation = clamp(reputation+15,0,100);
+}
+function buyCashier(){
+  if(hasCashier) return;
+  if(cash<CASHIER_COST) return;
+  cash -= CASHIER_COST; hasCashier = true;
+}
+
+var SHOP_ITEMS = [
+  {key:'pump', name:'Unlock Pump', get:function(){return pumpsUnlocked<4?fmt(pumpUnlockCost(pumpsUnlocked)):'MAX';}, desc:function(){return 'Pumps: '+pumpsUnlocked+'/4';}, buy:buyPump, maxed:function(){return pumpsUnlocked>=4;}},
+  {key:'att', name:'Hire Attendant', get:function(){return fmt(attendantCost());}, desc:function(){return 'Owned: '+attendants+' (auto-fuels cars, wage $20/day ea)';}, buy:buyAttendant, maxed:function(){return false;}},
+  {key:'tank', name:'Bigger Tank', get:function(){return tankLevel<4?fmt(tankUpgradeCost()):'MAX';}, desc:function(){return 'Capacity: '+tankCap+' gal (+400)';}, buy:buyTank, maxed:function(){return tankLevel>=4;}},
+  {key:'ad', name:'Advertise', get:function(){return reputation<100?fmt(adCost()):'MAX';}, desc:function(){return 'Reputation: '+Math.round(reputation)+'/100 (+15)';}, buy:buyAd, maxed:function(){return reputation>=100;}},
+  {key:'cashier', name:'Hire Cashier', get:function(){return hasCashier?'OWNED':fmt(CASHIER_COST);}, desc:function(){return 'Auto-restocks store, wage $15/day';}, buy:buyCashier, maxed:function(){return hasCashier;}}
+];
+
+// ── Day cycle ─────────────────────────────────────────────────────────────────
+function endDay(){
+  var revenue = 0; // already added live; just report expenses now
+  var wages = dailyWages(), rent = dailyRent();
+  var expenses = wages+rent;
+  cash -= expenses;
+  daySummary = {day:day, wages:wages, rent:rent, expenses:expenses, cashAfter:cash, served:carsServedTotal};
+  hi.bestDay = Math.max(hi.bestDay, day);
+  hi.bestCash = Math.max(hi.bestCash, cash);
+  saveHi();
+  state = 'daysummary';
+}
+
+function nextDay(){
+  day++;
+  dayTimer = 0;
+  rushTriggeredToday = false;
+  rushUntil = 0;
+  carsServedTotal = 0;
+  marketPrice = clamp(marketPrice + (Math.random()-0.5)*0.3, 2.4, 4.3);
+  if(hasCashier && storeStock<=0 && cash>=50){ cash-=50; storeStock=25; }
+  state = 'playing';
+}
+
+// ── Main update ───────────────────────────────────────────────────────────────
+var last = 0;
+function update(dt){
+  if(state!=='playing') return;
+  dayTimer += dt;
+  spawnTimer -= dt;
+
+  if(!rushTriggeredToday && dayTimer > 30 && Math.random()<0.004){
+    rushTriggeredToday = true; rushUntil = dayTimer + 18;
+    addFloat(VW/2, 90, 'RUSH HOUR!', '#f39c12');
+  }
+
+  if(spawnTimer<=0){ spawnCar(); spawnTimer = effectiveSpawnInterval()*(0.7+Math.random()*0.6); }
+
+  updateCars(dt);
+
+  if(truckETA>0){ truckETA -= dt; if(truckETA<=0){ truckETA=0; tankGal = tankCap; addFloat(TANK_UI.x+60,TANK_UI.y-10,'Fuel delivered!','#2ecc71'); } }
+  if(hasCashier && storeStock<=0 && cash>=50){ cash-=50; storeStock=25; }
+
+  for(var i=floaters.length-1;i>=0;i--){ floaters[i].y-=30*dt; floaters[i].life-=dt; if(floaters[i].life<=0) floaters.splice(i,1); }
+
+  if(cash < -150){
+    hi.bestDay = Math.max(hi.bestDay, day); saveHi();
+    state = 'gameover';
+    return;
+  }
+
+  if(dayTimer>=DAY_LEN){ endDay(); }
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+function skyColor(){
+  var t = dayTimer/DAY_LEN;
+  if(t<0.5){ var k=t/0.5; return lerpColor('#7ec8ff','#ffd27f',Math.max(0,k*2-1)); }
+  else { var k2=(t-0.5)/0.5; if(k2<0.6) return lerpColor('#ffd27f','#2c3e6e',k2/0.6); return lerpColor('#2c3e6e','#111a33',(k2-0.6)/0.4); }
+}
+function lerpColor(a,b,t){
+  t=clamp(t,0,1);
+  var ah=parseInt(a.slice(1),16), bh=parseInt(b.slice(1),16);
+  var ar=(ah>>16)&255, ag=(ah>>8)&255, ab=ah&255;
+  var br=(bh>>16)&255, bg=(bh>>8)&255, bb=bh&255;
+  var r=Math.round(ar+(br-ar)*t), g=Math.round(ag+(bg-ag)*t), bl=Math.round(ab+(bb-ab)*t);
+  return 'rgb('+r+','+g+','+bl+')';
+}
+
+function draw(){
+  ctx.save();
+  ctx.setTransform(scale,0,0,scale,offX,offY);
+  ctx.clearRect(0,0,VW,VH);
+
+  // sky/ground
+  ctx.fillStyle = state==='playing'||state==='shop'||state==='daysummary' ? skyColor() : '#2c3e6e';
+  ctx.fillRect(0,0,VW,VH);
+  ctx.fillStyle = '#5b8a3a';
+  ctx.fillRect(0,ROAD_Y-40,VW,VH-(ROAD_Y-40));
+  ctx.fillStyle = '#444';
+  ctx.fillRect(0,ROAD_Y-10,VW,60);
+  ctx.strokeStyle='rgba(255,255,255,0.5)'; ctx.setLineDash([18,14]); ctx.lineWidth=3;
+  ctx.beginPath(); ctx.moveTo(0,ROAD_Y+20); ctx.lineTo(VW,ROAD_Y+20); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = '#7d7d7d';
+  rr(20,190,VW-40,240,10); ctx.fill();
+
+  drawStore();
+  drawTank();
+  for(var i=0;i<pumps.length;i++) drawPump(pumps[i],i);
+  for(var i2=0;i2<cars.length;i2++) drawCar(cars[i2]);
+  for(var f=0;f<floaters.length;f++){
+    var fl=floaters[f];
+    ctx.globalAlpha = clamp(fl.life,0,1);
+    ctx.fillStyle=fl.color; ctx.font='bold 16px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(fl.text, fl.x, fl.y);
+    ctx.globalAlpha=1;
+  }
+
+  drawHUD();
+
+  if(state==='start') drawStart();
+  if(state==='shop') drawShop();
+  if(state==='daysummary') drawDaySummary();
+  if(state==='gameover') drawGameOver();
+
+  ctx.restore();
+}
+
+function drawStore(){
+  ctx.fillStyle='#a05a2c'; rr(STORE.x,STORE.y,STORE.w,STORE.h,6); ctx.fill();
+  ctx.fillStyle='#c97a3d'; rr(STORE.x+8,STORE.y+8,STORE.w-16,STORE.h-40,4); ctx.fill();
+  ctx.fillStyle='#2c3e50'; ctx.fillRect(STORE.x+STORE.w/2-16,STORE.y+STORE.h-46,32,46);
+  ctx.fillStyle='#fff'; ctx.font='bold 14px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('STORE', STORE.x+STORE.w/2, STORE.y+24);
+  ctx.font='12px sans-serif';
+  ctx.fillText('Snacks: '+storeStock+'/'+storeCap, STORE.x+STORE.w/2, STORE.y+44);
+}
+
+function drawTank(){
+  var pct = tankGal/tankCap;
+  ctx.fillStyle='#333'; rr(TANK_UI.x,TANK_UI.y,TANK_UI.w,TANK_UI.h,6); ctx.fill();
+  var col = pct<0.2?'#e74c3c':(pct<0.45?'#f1c40f':'#2ecc71');
+  ctx.fillStyle=col; rr(TANK_UI.x+4,TANK_UI.y+4,(TANK_UI.w-8)*pct,TANK_UI.h-8,4); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 12px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('Fuel: '+Math.round(tankGal)+'/'+tankCap+' gal', TANK_UI.x+TANK_UI.w/2, TANK_UI.y+TANK_UI.h/2+4);
+  if(truckETA>0){
+    ctx.fillStyle='#3498db'; ctx.font='11px sans-serif';
+    ctx.fillText('Truck ETA: '+Math.ceil(truckETA)+'s', TANK_UI.x+TANK_UI.w/2, TANK_UI.y+TANK_UI.h+14);
+  }
+}
+
+function drawPump(p,idx){
+  if(!p.unlocked){
+    ctx.fillStyle='rgba(0,0,0,0.35)'; rr(p.x-28,p.y-70,56,90,6); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='bold 12px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('🔒', p.x, p.y-30);
+    ctx.font='11px sans-serif';
+    ctx.fillText(fmt(pumpUnlockCost(idx)), p.x, p.y-10);
+    return;
+  }
+  ctx.fillStyle='#ecf0f1'; rr(p.x-18,p.y+10,36,10,3); ctx.fill();
+  ctx.fillStyle= p.noFuel ? '#7f8c8d' : '#c0392b';
+  rr(p.x-16,p.y-60,32,70,4); ctx.fill();
+  ctx.fillStyle='#fff'; rr(p.x-11,p.y-52,22,26,3); ctx.fill();
+  ctx.fillStyle='#2c3e50'; ctx.font='bold 11px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('P'+(idx+1), p.x, p.y-34);
+  if(p.fueling){
+    ctx.fillStyle='#333'; rr(p.x-22,p.y-78,44,8,3); ctx.fill();
+    ctx.fillStyle='#2ecc71'; rr(p.x-20,p.y-76,40*clamp(p.progress,0,1),4,2); ctx.fill();
+  } else if(p.car && !p.noFuel){
+    ctx.fillStyle='#f1c40f'; ctx.font='16px sans-serif'; ctx.fillText('▶', p.x, p.y-78);
+  } else if(p.noFuel){
+    ctx.fillStyle='#e74c3c'; ctx.font='11px sans-serif'; ctx.fillText('NO FUEL', p.x, p.y-78);
+  }
+}
+
+function drawCar(c){
+  ctx.save();
+  ctx.fillStyle=c.color;
+  rr(c.x-22,c.y-12,44,20,6); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.6)';
+  rr(c.x-12,c.y-10,20,10,3); ctx.fill();
+  ctx.fillStyle='#222';
+  ctx.beginPath(); ctx.arc(c.x-12,c.y+9,5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(c.x+12,c.y+9,5,0,Math.PI*2); ctx.fill();
+  if(c.state==='queue'){
+    ctx.fillStyle='#fff'; ctx.font='10px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(Math.ceil(c.patience)+'s', c.x, c.y-16);
+  }
+  ctx.restore();
+}
+
+function star(x,y,r,filled){
+  ctx.fillStyle = filled?'#f1c40f':'rgba(255,255,255,0.25)';
+  ctx.beginPath();
+  for(var i=0;i<5;i++){
+    var a=-Math.PI/2 + i*2*Math.PI/5;
+    var a2=a+Math.PI/5;
+    ctx.lineTo(x+Math.cos(a)*r, y+Math.sin(a)*r);
+    ctx.lineTo(x+Math.cos(a2)*r*0.45, y+Math.sin(a2)*r*0.45);
+  }
+  ctx.closePath(); ctx.fill();
+}
+
+var BTN = {}; // populated each frame for hit-testing
+function drawHUD(){
+  ctx.fillStyle='rgba(20,20,25,0.82)'; ctx.fillRect(0,0,VW,46);
+  ctx.textAlign='left'; ctx.fillStyle='#2ecc71'; ctx.font='bold 20px sans-serif';
+  ctx.fillText(fmt(cash), 14, 30);
+  ctx.fillStyle='#ecf0f1'; ctx.font='14px sans-serif';
+  ctx.fillText('Day '+day, 150, 20);
+  var pct = clamp(dayTimer/DAY_LEN,0,1);
+  ctx.fillStyle='#444'; ctx.fillRect(150,26,90,8);
+  ctx.fillStyle= dayTimer<DAY_LEN*0.5?'#f1c40f':'#34495e';
+  ctx.fillRect(150,26,90*pct,8);
+  var stars = clamp(Math.floor(reputation/20)+1,1,5);
+  for(var i=0;i<5;i++) star(268+i*16,20,7,i<stars);
+  ctx.fillStyle='#ecf0f1'; ctx.font='13px sans-serif'; ctx.textAlign='left';
+  ctx.fillText('Market: '+fmt2(marketPrice)+'/gal', 380, 18);
+  ctx.fillText('Served today: '+carsServedTotal, 380, 36);
+
+  // price controls
+  ctx.textAlign='center';
+  BTN.priceDown = {x:600,y:8,w:26,h:30};
+  BTN.priceUp = {x:760,y:8,w:26,h:30};
+  ctx.fillStyle='#34495e'; rr(BTN.priceDown.x,BTN.priceDown.y,BTN.priceDown.w,BTN.priceDown.h,5); ctx.fill();
+  rr(BTN.priceUp.x,BTN.priceUp.y,BTN.priceUp.w,BTN.priceUp.h,5); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 18px sans-serif';
+  ctx.fillText('-', BTN.priceDown.x+13, BTN.priceDown.y+22);
+  ctx.fillText('+', BTN.priceUp.x+13, BTN.priceUp.y+22);
+  ctx.font='bold 15px sans-serif'; ctx.fillStyle='#f1c40f';
+  ctx.fillText('Your price: '+fmt2(price)+'/gal', 680, 28);
+
+  // bottom bar
+  ctx.fillStyle='rgba(20,20,25,0.82)'; ctx.fillRect(0,VH-56,VW,56);
+  BTN.restock = {x:20,y:VH-46,w:150,h:36};
+  BTN.truck = {x:190,y:VH-46,w:170,h:36};
+  BTN.shop = {x:VW-150,y:VH-46,w:130,h:36};
+
+  drawBtn(BTN.restock, 'Restock +25 ($50)', storeStock<storeCap && cash>=50);
+  var need = tankCap-tankGal;
+  var truckLabel = truckETA>0 ? ('Truck ETA '+Math.ceil(truckETA)+'s') : ('Order Fuel ('+fmt(need*WHOLESALE)+')');
+  drawBtn(BTN.truck, truckLabel, truckETA<=0 && need>=10 && cash>=need*WHOLESALE);
+  drawBtn(BTN.shop, '🛒 Upgrades Shop', true);
+
+  ctx.fillStyle='rgba(255,255,255,0.6)'; ctx.font='11px sans-serif';
+  ctx.fillText('Attendants: '+attendants+'   Pumps: '+pumpsUnlocked+'/4'+(hasCashier?'   Cashier ✓':''), VW/2, VH-8);
+}
+
+function drawBtn(b,label,enabled){
+  ctx.fillStyle = enabled ? '#2c7a4b' : '#555';
+  rr(b.x,b.y,b.w,b.h,7); ctx.fill();
+  ctx.fillStyle = enabled ? '#fff' : '#999';
+  ctx.font='bold 13px sans-serif'; ctx.textAlign='center';
+  ctx.fillText(label, b.x+b.w/2, b.y+b.h/2+5);
+}
+
+var SHOP_BTNS = [];
+function drawShop(){
+  ctx.fillStyle='rgba(0,0,0,0.7)'; ctx.fillRect(0,0,VW,VH);
+  ctx.fillStyle='#1e2a3a'; rr(VW/2-260,70,520,400,12); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 24px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('Upgrades Shop', VW/2, 112);
+  SHOP_BTNS = [];
+  for(var i=0;i<SHOP_ITEMS.length;i++){
+    var it = SHOP_ITEMS[i];
+    var y = 140 + i*58;
+    var maxed = it.maxed();
+    var b = {x:VW/2-240,y:y,w:400,h:46};
+    SHOP_BTNS.push(b);
+    ctx.fillStyle = maxed ? '#333' : '#2c3e50';
+    rr(b.x,b.y,b.w,b.h,8); ctx.fill();
+    ctx.textAlign='left'; ctx.fillStyle='#fff'; ctx.font='bold 15px sans-serif';
+    ctx.fillText(it.name, b.x+14, b.y+19);
+    ctx.font='11px sans-serif'; ctx.fillStyle='#bdc3c7';
+    ctx.fillText(it.desc(), b.x+14, b.y+36);
+    ctx.textAlign='right'; ctx.font='bold 15px sans-serif';
+    ctx.fillStyle = maxed ? '#888' : '#2ecc71';
+    ctx.fillText(it.get(), b.x+b.w-14, b.y+28);
+  }
+  ctx.fillStyle='#c0392b'; rr(VW/2+190,80,50,34,8); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 16px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('X', VW/2+215, 102);
+  BTN.shopClose = {x:VW/2+190,y:80,w:50,h:34};
+}
+
+function drawDaySummary(){
+  ctx.fillStyle='rgba(0,0,0,0.75)'; ctx.fillRect(0,0,VW,VH);
+  ctx.fillStyle='#1e2a3a'; rr(VW/2-220,140,440,260,12); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='bold 24px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('Day '+daySummary.day+' Complete', VW/2, 180);
+  ctx.font='15px sans-serif'; ctx.textAlign='left';
+  var lx = VW/2-160, ly=220;
+  ctx.fillText('Cars served: '+daySummary.served, lx, ly);
+  ctx.fillText('Rent: '+fmt(daySummary.rent), lx, ly+30);
+  ctx.fillText('Wages: '+fmt(daySummary.wages), lx, ly+60);
+  ctx.fillStyle='#2ecc71'; ctx.font='bold 17px sans-serif';
+  ctx.fillText('Cash on hand: '+fmt(daySummary.cashAfter), lx, ly+100);
+  ctx.textAlign='center'; ctx.fillStyle='#f1c40f'; ctx.font='13px sans-serif';
+  ctx.fillText('Market price will shift when the next day starts', VW/2, ly+130);
+  BTN.nextDay = {x:VW/2-90,y:360,w:180,h:40};
+  drawBtn(BTN.nextDay, 'Start Day '+(daySummary.day+1), true);
+}
+
+function drawStart(){
+  ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,VW,VH);
+  ctx.fillStyle='#fff'; ctx.font='bold 42px sans-serif'; ctx.textAlign='center';
+  ctx.fillText("Fill 'Er Up!", VW/2, 190);
+  ctx.font='18px sans-serif'; ctx.fillStyle='#ecf0f1';
+  ctx.fillText('Run your own gas station. Set prices, serve cars, keep the tank full.', VW/2, 230);
+  ctx.font='14px sans-serif'; ctx.fillStyle='#bdc3c7';
+  ctx.fillText('Click parked cars to fuel them (or hire attendants to automate).', VW/2, 258);
+  ctx.fillText('Best day survived: '+hi.bestDay+'   Best cash: '+fmt(hi.bestCash), VW/2, 282);
+  BTN.start = {x:VW/2-100,y:320,w:200,h:48};
+  drawBtn(BTN.start, 'START GAME', true);
+}
+
+function drawGameOver(){
+  ctx.fillStyle='rgba(0,0,0,0.75)'; ctx.fillRect(0,0,VW,VH);
+  ctx.fillStyle='#e74c3c'; ctx.font='bold 36px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('BANKRUPT!', VW/2, 200);
+  ctx.fillStyle='#fff'; ctx.font='18px sans-serif';
+  ctx.fillText('You survived '+day+' day'+(day===1?'':'s')+'.', VW/2, 240);
+  ctx.fillText('Best day survived: '+hi.bestDay+'   Best cash: '+fmt(hi.bestCash), VW/2, 266);
+  BTN.restart = {x:VW/2-100,y:310,w:200,h:48};
+  drawBtn(BTN.restart, 'TRY AGAIN', true);
+}
+
+// ── Input ─────────────────────────────────────────────────────────────────────
+function ptr(cx,cy){
+  var p = cpos(cx,cy);
+  if(state==='start'){ if(inB(p,BTN.start)) { newGame(); state='playing'; } return; }
+  if(state==='gameover'){ if(inB(p,BTN.restart)) { newGame(); state='playing'; } return; }
+  if(state==='daysummary'){ if(BTN.nextDay && inB(p,BTN.nextDay)) nextDay(); return; }
+  if(state==='shop'){
+    if(BTN.shopClose && inB(p,BTN.shopClose)){ state='playing'; return; }
+    for(var i=0;i<SHOP_BTNS.length;i++){
+      if(inB(p,SHOP_BTNS[i]) && !SHOP_ITEMS[i].maxed()){ SHOP_ITEMS[i].buy(); return; }
+    }
+    return;
+  }
+  if(state!=='playing') return;
+
+  if(BTN.priceDown && inB(p,BTN.priceDown)){ price = clamp(price-0.10, WHOLESALE+0.10, 4.50); return; }
+  if(BTN.priceUp && inB(p,BTN.priceUp)){ price = clamp(price+0.10, WHOLESALE+0.10, 4.50); return; }
+  if(BTN.restock && inB(p,BTN.restock)){ restock(); return; }
+  if(BTN.truck && inB(p,BTN.truck)){ orderFuel(); return; }
+  if(BTN.shop && inB(p,BTN.shop)){ state='shop'; return; }
+
+  // click a parked pump/car to start fueling manually
+  for(var pi=0;pi<pumps.length;pi++){
+    var pu = pumps[pi];
+    if(!pu.unlocked) continue;
+    var hit = p.x>pu.x-28 && p.x<pu.x+28 && p.y>pu.y-90 && p.y<pu.y+24;
+    if(hit && pu.car && !pu.fueling && !pu.noFuel){ startFueling(pi); return; }
+  }
+}
+canvas.addEventListener('click',function(e){ptr(e.clientX,e.clientY);});
+canvas.addEventListener('touchstart',function(e){e.preventDefault();ptr(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
+
+// ── Main loop ─────────────────────────────────────────────────────────────────
+function frame(ts){
+  if(!last) last = ts;
+  var dt = Math.min((ts-last)/1000, 0.05);
+  last = ts;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
