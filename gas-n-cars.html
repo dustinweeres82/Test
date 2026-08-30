@@ -487,7 +487,7 @@ function shadowEllipse(x,z,rx,rz,yaw,alpha){
       var t=i/segs*TAU, ox=Math.cos(t)*rx*q, oz=Math.sin(t)*rz*q;
       v.push(x+ox*cs+oz*sn, 0.028+k*0.002, z-ox*sn+oz*cs);
     }
-    emitPoly(v, [72,50,34], { alpha:a*0.24, seam:false, depth:d-0.4-k*0.02 });
+    emitPoly(v, [72,50,34], { alpha:Math.min(a*0.24,0.34), seam:false, depth:d-0.4-k*0.02 });
   }
 }
 function shadowRect(x,z,w,d2,yaw,alpha){
@@ -512,7 +512,7 @@ function drawShadows(){
   /* cars */
   for(i=0;i<CARS.length;i++){
     var c=CARS[i];
-    shadowEllipse(c.x+0.32, c.z+0.32, 1.25, 2.35, c.yaw, 1);
+    shadowEllipse(c.x+0.30, c.z+0.30, 1.15, 2.25, c.yaw, 1.5);
   }
   /* the delivery truck, when it is in */
   if(typeof truck!=='undefined' && truck && truck.here)
@@ -824,51 +824,192 @@ function newCar(){
 /* ── the model ───────────────────────────────────────────────────────────── */
 function drawCar(c){
   var B=basis(c.yaw,0,0), o=[c.x,0,c.z];
-  var body = c.burned>0.5 ? [58,50,46] : (c.painted?c.paint:c.col);
-  var dirty = mixc(body,[122,106,84], c.dirt*0.6);
-  var d=dist2(c.x,c.z,camX,camZ);
-  setAO(0,1.6);
-  /* wheels */
-  for(var wx=-1;wx<=1;wx+=2) for(var wz=-1;wz<=1;wz+=2){
-    if(!c.parts.wheel && wx<0 && wz>0) continue;
-    meshPrismB(B,o, wx*0.88, 0.34, wz*1.26, 0.35, 0.16, 10,'x', [42,44,50], [120,124,134]);
+  var base  = (c.painted && c.paint) ? c.paint : c.col;
+  var burn  = clamp(c.burned||0,0,1);
+  var body  = mixc(base,[52,46,44], burn*0.92);
+  var dirty = mixc(body,[122,106,84], (c.dirt||0)*0.6);
+  var low   = shade(dirty,0.72);                        /* rocker, sills, pillar */
+  var arch  = shade(dirty,0.70);                        /* wheel-arch band       */
+  var roofc = mixc(dirty,[255,255,255],0.12);
+  var chrome= mixc(CAR_CHROME,[74,68,60], burn*0.65);
+  var gcol  = mixc(CAR_GLASSC,[44,46,54], burn*0.72);
+  var d = dist2(c.x,c.z,camX,camZ);
+  var near = d<19, closeUp = d<12;
+  var glassOn = c.glass>0.5;
+  var liner = glassOn ? CAR_CABIN : mixc(CAR_CABIN,[210,206,214],0.30);
+  var i, k, s, sx, wz, X, A, C, za, zc;
+
+  /* the contact shadow comes from drawShadows() in the ground pass, so that it
+     cannot be painted over by the car's own far-side panels */
+  setAO(-0.70,2.50);
+
+  /* ── wheels ─────────────────────────────────────────────────────────── */
+  var hub = mixc(CAR_HUB,[112,98,74],(c.dirt||0)*0.55);
+  for(i=0;i<4;i++){
+    sx = i<2 ? -1 : 1; wz = CAR_WHZ[i&1];
+    if(!c.parts.wheel && sx<0 && wz>0){          /* stolen wheel — bare drum */
+      carDisc(B,o, sx*0.62, CAR_WHR*0.72, wz, 0.15, 6,'x', [34,36,42], sx*0.3, 0.3);
+      continue;
+    }
+    carWheel(B,o, sx*CAR_WHX, CAR_WHR, wz, (c.wheelSpin||0)*(sx<0?-1:1), CAR_TYRE, hub);
   }
-  /* hull */
-  drawBox(B,o, 0, 0.62, 0, 0.84, 0.30, 2.00, dirty);            /* lower body */
-  drawBox(B,o, 0, 0.94, 0.05, 0.86, 0.22, 1.90, dirty);         /* shoulder */
-  drawBox(B,o, 0, 1.34, -0.12, 0.76, 0.34, 1.05, dirty);        /* cabin */
-  drawBox(B,o, 0, 1.70, -0.12, 0.70, 0.05, 1.00, shade(dirty,0.92)); /* roof */
-  drawBox(B,o, 0, 0.36, 0, 0.86, 0.10, 1.96, [52,54,60]);       /* sill */
-  /* glass */
-  if(c.glass>0.5){
-    drawBox(B,o, 0, 1.40, -1.16, 0.56, 0.19, 0.03, C_GLASS);
-    drawBox(B,o, 0, 1.40,  0.92, 0.56, 0.19, 0.03, C_GLASS);
-    for(var s=-1;s<=1;s+=2) drawBox(B,o, s*0.775, 1.40, -0.12, 0.02, 0.17, 0.66, C_GLASS);
+
+  /* ── body shell ─────────────────────────────────────────────────────── */
+  carHullDraw(B,o, dirty, low, arch);
+
+  /* ── greenhouse: pillars, roof and inset glass ──────────────────────── */
+  var G=CAR_CAB, cabpts=[], CABREF=[0,1.34,0];
+  for(i=0;i<4;i++){
+    var g=G[i];
+    cabpts.push([[ g.w,CAR_CABBOT],[ g.w,g.yb],[ g.wt,g.yt],
+                 [-g.wt,g.yt],[-g.w,g.yb],[-g.w,CAR_CABBOT]]);
+  }
+  /* per ring: skirt, right pane, top pane, left pane, skirt */
+  var ringCol=[[dirty,dirty,gcol,dirty,dirty],     /* A-pillars + windscreen  */
+               [dirty,gcol,roofc,gcol,dirty],      /* side glass + roof       */
+               [dirty,dirty,gcol,dirty,dirty]];    /* C-pillars + hatch glass */
+  for(k=0;k<3;k++){
+    A=cabpts[k]; C=cabpts[k+1]; za=G[k].z; zc=G[k+1].z;
+    for(i=0;i<5;i++){
+      var col=ringCol[k][i], isGlass = (col===gcol);
+      if(isGlass && !glassOn) continue;
+      carFace(B,o,[[A[i][0],A[i][1],za],[A[i+1][0],A[i+1][1],za],
+                   [C[i+1][0],C[i+1][1],zc],[C[i][0],C[i][1],zc]],
+              col, isGlass?0.55:undefined, CABREF);
+    }
+  }
+  /* x of the cabin flank at a given height — trim and liner ride on this */
+  function cabX(y){ return 0.660 - 0.1014*(y-1.06); }
+  if(near) for(s=-1;s<=1;s+=2)          /* B-pillar splits the long side glass */
+    carFace(B,o,[[s*(cabX(1.07)+0.010),1.07,-0.052],[s*(cabX(1.73)+0.010),1.73,-0.052],
+                 [s*(cabX(1.73)+0.010),1.73, 0.052],[s*(cabX(1.07)+0.010),1.07, 0.052]],
+            shade(dirty,0.88), undefined, CABREF, 0.30);
+  if(!glassOn && near){                 /* jagged remains of a smashed window */
+    for(s=-1;s<=1;s+=2)
+      carFace(B,o,[[s*(cabX(1.06)+0.014),1.06,-0.66],[s*(cabX(1.26)+0.014),1.26,-0.30],
+                   [s*(cabX(1.06)+0.014),1.06, 0.16]], [224,240,246], undefined, CABREF, 0.30);
+    carFace(B,o,[[-0.36,1.09,-1.15],[0.02,1.30,-1.02],[0.36,1.08,-1.14]],
+            [224,240,246], undefined, CABREF, 0.30);
+  }
+
+  /* ── interior ───────────────────────────────────────────────────────── */
+  /* cabin liner: panels whose normals point INWARD, so only the far one draws
+     and the glass always has something opaque behind it instead of the sky */
+  for(s=-1;s<=1;s+=2)
+    carFace(B,o,[[s*(cabX(1.06)-0.012),1.06,-0.90],[s*(cabX(1.75)-0.012),1.75,-0.90],
+                 [s*(cabX(1.75)-0.012),1.75, 0.88],[s*(cabX(1.06)-0.012),1.06, 0.88]],
+            liner, undefined, [s*4,1.36,0]);
+  carFace(B,o,[[-0.58,1.06,0.82],[0.58,1.06,0.82],[0.58,1.73,0.82],[-0.58,1.73,0.82]],
+          shade(liner,0.86), undefined, [0,1.36,4]);
+  if(near){
+    /* dashboard: top deck and the face under the screen */
+    carFace(B,o,[[-0.56,1.10,-1.12],[0.56,1.10,-1.12],[0.56,1.10,-0.90],[-0.56,1.10,-0.90]],
+            CAR_DASHC, undefined, [0,0.6,-1.0]);
+    carFace(B,o,[[-0.56,0.98,-1.12],[0.56,0.98,-1.12],[0.56,1.10,-1.12],[-0.56,1.10,-1.12]],
+            shade(CAR_DASHC,0.82), undefined, [0,1.10,4]);
+    for(s=-1;s<=1;s+=2){                                   /* two seat backs */
+      carFace(B,o,[[s*0.08,1.00,0.06],[s*0.52,1.00,0.06],[s*0.52,1.52,0.06],[s*0.08,1.52,0.06]],
+              s<0?CAR_SEATC:shade(CAR_SEATC,0.93), undefined, [0,1.2,4]);
+    }
+    carDisc(B,o, -0.30, 1.22, -0.72, 0.150, 8, 'z', [40,42,52], -0.3, 0.10);
+    carFace(B,o,[[-0.36,1.20,-0.74],[-0.24,1.20,-0.74],[-0.24,1.24,-0.74],[-0.36,1.24,-0.74]],
+            [180,182,192], undefined, [0,1.22,0.4], 0.14);
+  }
+
+  /* ── nose: chrome grille, round lamps, bumper bar, plate ────────────── */
+  carFace(B,o,[[-0.340,0.586,-1.966],[0.340,0.586,-1.966],
+               [0.340,0.894,-1.966],[-0.340,0.894,-1.966]], CAR_GRILLEC, undefined, null, 0.56);
+  if(near) for(i=0;i<3;i++){
+    var gy=0.662+i*0.080;
+    carFace(B,o,[[-0.306,gy-0.020,-1.978],[0.306,gy-0.020,-1.978],
+                 [0.306,gy+0.020,-1.978],[-0.306,gy+0.020,-1.978]], chrome, undefined, null, 0.59);
+  }
+  for(s=-1;s<=1;s+=2){
+    carDisc(B,o, s*0.516, 0.748, -1.958, 0.183, 8, 'z', CAR_LAMPR, -0.3, 0.55);
+    carDisc(B,o, s*0.516, 0.748, -1.976, 0.142, 8, 'z',
+            burn>0.5?[122,118,106]:CAR_LAMP, -0.3, 0.57);
+  }
+  drawBox(B,o, 0, 0.505, -1.988, 0.770, 0.100, 0.070, chrome);
+  if(c.parts.plate){
+    carFace(B,o,[[-0.268,0.470,-2.066],[0.268,0.470,-2.066],
+                 [0.268,0.644,-2.066],[-0.268,0.644,-2.066]], CAR_TRIMD, undefined, null, 0.58);
+    carFace(B,o,[[-0.245,0.488,-2.076],[0.245,0.488,-2.076],
+                 [0.245,0.626,-2.076],[-0.245,0.626,-2.076]], CAR_PLATEC, undefined, null, 0.62);
+  }
+
+  /* ── tail: lamp blocks, bumper bar, plate ───────────────────────────── */
+  for(s=-1;s<=1;s+=2){
+    carFace(B,o,[[s*0.262,0.668,1.962],[s*0.684,0.668,1.962],
+                 [s*0.684,0.952,1.962],[s*0.262,0.952,1.962]], CAR_TRIMD, undefined, null, 0.55);
+    carFace(B,o,[[s*0.292,0.762,1.974],[s*0.654,0.762,1.974],
+                 [s*0.654,0.924,1.974],[s*0.292,0.924,1.974]],
+            burn>0.5?[110,52,48]:CAR_TAILL, undefined, null, 0.57);
+    carFace(B,o,[[s*0.292,0.696,1.974],[s*0.654,0.696,1.974],
+                 [s*0.654,0.752,1.974],[s*0.292,0.752,1.974]],
+            burn>0.5?[104,98,88]:[238,232,206], undefined, null, 0.57);
+  }
+  drawBox(B,o, 0, 0.505, 1.988, 0.770, 0.100, 0.070, chrome);
+  if(c.parts.plate){
+    carFace(B,o,[[-0.268,0.470,2.066],[0.268,0.470,2.066],
+                 [0.268,0.644,2.066],[-0.268,0.644,2.066]], CAR_TRIMD, undefined, null, 0.58);
+    carFace(B,o,[[-0.245,0.488,2.076],[0.245,0.488,2.076],
+                 [0.245,0.626,2.076],[-0.245,0.626,2.076]], CAR_PLATEC, undefined, null, 0.62);
+  }
+
+  /* ── flanks: door shut lines and a handle ───────────────────────────── */
+  if(near) for(s=-1;s<=1;s+=2){
+    var dl=[-0.75,0.60];
+    for(i=0;i<2;i++){
+      var z0=dl[i];
+      X=s*(carHullW(z0)+0.014);
+      carFace(B,o,[[X,0.505,z0-0.017],[X,0.860,z0-0.017],
+                   [X,0.860,z0+0.017],[X,0.505,z0+0.017]], shade(dirty,0.55),
+              undefined, null, 0.36);
+    }
+    X=s*(carHullW(-0.06)+0.020);
+    carFace(B,o,[[X,0.782,-0.17],[X,0.782,0.05],[X,0.834,0.05],[X,0.834,-0.17]],
+            chrome, undefined, null, 0.38);
+  }
+
+  /* ── fuel flap, right flank, over the rear arch ─────────────────────── */
+  X = carHullW(1.30);
+  carDisc(B,o, X+0.020, 0.790, 1.30, 0.118, 8, 'x', chrome, 0.3, 0.34);
+  if(c.capOpen){
+    carDisc(B,o, X+0.030, 0.790, 1.30, 0.086, 8, 'x', [22,24,28], 0.3, 0.36);
+    /* the flap, swung open on its front hinge — drawn from both sides */
+    var fp=[[X+0.005,0.688,1.19],[X+0.190,0.688,1.32],
+            [X+0.190,0.892,1.32],[X+0.005,0.892,1.19]];
+    carFace(B,o,fp, shade(dirty,0.90), undefined, [0.30,0.79,2.10], 0.42);
+    carFace(B,o,fp, [44,46,54],        undefined, [1.50,0.79,0.40], 0.42);
   } else {
-    for(var s2=-1;s2<=1;s2+=2) drawBox(B,o, s2*0.775, 1.56, -0.12, 0.03, 0.03, 0.66, [180,200,206]);
+    carDisc(B,o, X+0.034, 0.790, 1.30, 0.086, 8, 'x', shade(dirty,0.86), 0.3, 0.36);
   }
-  /* lights, grille, plate */
-  drawBox(B,o, 0, 0.78, -2.03, 0.80, 0.16, 0.05, [64,66,74]);
-  for(var l=-1;l<=1;l+=2){
-    drawBox(B,o, l*0.58, 0.86, -2.04, 0.18, 0.12, 0.04, [252,246,214]);
-    drawBox(B,o, l*0.58, 0.86,  2.04, 0.18, 0.12, 0.04, [206,72,60]);
+
+  /* ── wing mirrors on stalks ─────────────────────────────────────────── */
+  for(s=-1;s<=1;s+=2){
+    if(!(s<0 ? c.parts.mirrorL : c.parts.mirrorR)) continue;
+    meshPrismB(B,o, s*0.700, 1.285, -0.78, 0.028, 0.072, 3, 'x', low);
+    drawBox(B,o, s*0.802, 1.300, -0.78, 0.052, 0.062, 0.058, dirty);
+    if(closeUp)
+      carFace(B,o,[[s*0.856,1.246,-0.830],[s*0.856,1.246,-0.730],
+                   [s*0.856,1.354,-0.730],[s*0.856,1.354,-0.830]], [198,220,232],
+              undefined, [0,1.30,-0.78], 0.20);
   }
-  if(c.parts.plate) drawBox(B,o, 0, 0.56, -2.06, 0.26, 0.10, 0.03, [238,236,226]);
-  /* mirrors */
-  if(c.parts.mirrorL) drawBox(B,o, -0.82, 1.30, -0.78, 0.10, 0.07, 0.06, [40,44,52]);
-  if(c.parts.mirrorR) drawBox(B,o,  0.82, 1.30, -0.78, 0.10, 0.07, 0.06, [40,44,52]);
-  /* fuel cap on the left flank */
-  drawBox(B,o,  0.87, 0.80, 1.30, 0.03, 0.13, 0.13, c.capOpen?[60,62,68]:shade(body,0.8));
+
   /* the driver, sitting up in the cabin */
   if(!c.gone && c.state!=='leaving') drawDriver(c,B,o);
   clearAO();
   /* dirt speckles */
   if(c.dirt>0.05 && d<22){
     var rn=rngFrom(c.seed);
-    for(var k=0;k<14;k++){
+    for(var k2=0;k2<14;k2++){
       if(rn()>c.dirt) continue;
-      var px=(rn()-0.5)*1.6, py=0.5+rn()*0.9, pz=(rn()-0.5)*3.6;
-      drawBox(B,o, px<0?-0.88:0.88, py, pz, 0.02, 0.10+rn()*0.08, 0.10+rn()*0.08, [128,110,86]);
+      var side=rn()<0.5?-1:1, py=0.54+rn()*0.26, pz=(rn()-0.5)*2.9;
+      var hw2=0.06+rn()*0.06, hh2=0.05+rn()*0.05;
+      X=side*(carHullW(pz)+0.012);
+      carFace(B,o,[[X,py-hh2,pz-hw2],[X,py-hh2,pz+hw2],
+                   [X,py+hh2,pz+hw2],[X,py+hh2,pz-hw2]], [128,110,86],
+              undefined, null, 0.40);
     }
   }
   if(c.onFire>0) drawFire(c);
@@ -2330,6 +2471,101 @@ function drvBiasFor(hx,hy,hz){
   if(Math.abs(ez)>1e-4) t=Math.min(t, ((ez>0?1.02:-1.26)-hz)/ez);
   DRV_EX=ex; DRV_EY=ey; DRV_EZ=ez;
   return clamp(t+0.05, 0.05, 2.4);
+}
+var CAR_TYRE=[72,74,84], CAR_HUB=[236,239,245], CAR_CHROME=[220,226,234],
+    CAR_TRIMD=[38,40,48], CAR_GLASSC=[152,202,230], CAR_LAMP=[255,252,226],
+    CAR_LAMPR=[54,56,66], CAR_TAILL=[246,80,60], CAR_SEATC=[126,114,136],
+    CAR_DASHC=[86,88,100], CAR_PLATEC=[242,240,228], CAR_GRILLEC=[26,28,34],
+    CAR_CABIN=[62,58,74], CAR_REF=[0,0.85,0];
+var CAR_HULL=[ { z:-1.95, w:0.755, yb:0.50, yt:0.94, arch:0 },
+               { z:-1.78, w:0.795, yb:0.36, yt:0.99, arch:1 },
+               { z:-0.90, w:0.800, yb:0.34, yt:1.03, arch:0 },
+               { z: 0.86, w:0.805, yb:0.33, yt:1.11, arch:1 },
+               { z: 1.76, w:0.800, yb:0.34, yt:1.16, arch:0 },
+               { z: 1.95, w:0.760, yb:0.49, yt:1.12, arch:0 } ];
+var CAR_CAB=[ { z:-1.20, w:0.665, wt:0.645, yb:1.02, yt:1.07 },
+              { z:-0.88, w:0.660, wt:0.590, yb:1.06, yt:1.75 },
+              { z: 0.86, w:0.660, wt:0.590, yb:1.06, yt:1.75 },
+              { z: 1.36, w:0.668, wt:0.648, yb:1.10, yt:1.34 } ];
+var CAR_CABBOT=0.86, CAR_WHZ=[-1.34,1.31], CAR_WHX=0.730, CAR_WHR=0.390, CAR_WHW=0.145;
+function carFace(B,o,pts,col,alpha,ref,bias){
+  var n=pts.length, v=new Array(n*3), i, cx=0, cy=0, cz=0;
+  for(i=0;i<n;i++){
+    var p=ptOf(B,o,pts[i][0],pts[i][1],pts[i][2]);
+    v[i*3]=p[0]; v[i*3+1]=p[1]; v[i*3+2]=p[2];
+    cx+=p[0]; cy+=p[1]; cz+=p[2];
+  }
+  cx/=n; cy/=n; cz/=n;
+  var nx=0, ny=0, nz=0;               /* Newell — safe on collinear leading edges */
+  for(i=0;i<n;i++){
+    var j=(i+1)%n, ax=v[i*3],ay=v[i*3+1],az=v[i*3+2], bx=v[j*3],by=v[j*3+1],bz=v[j*3+2];
+    nx+=(ay-by)*(az+bz); ny+=(az-bz)*(ax+bx); nz+=(ax-bx)*(ay+by);
+  }
+  if(!nx && !ny && !nz) return;
+  var r=ref||CAR_REF, rp=ptOf(B,o,r[0],r[1],r[2]);
+  if((cx-rp[0])*nx+(cy-rp[1])*ny+(cz-rp[2])*nz < 0){ nx=-nx; ny=-ny; nz=-nz; }
+  if((cx-camX)*nx+(cy-camY)*ny+(cz-camZ)*nz > 0) return;
+  var opt;
+  if(alpha!==undefined || bias){
+    opt={};
+    if(alpha!==undefined) opt.alpha=alpha;
+    if(bias){
+      var dep=(cx-camX)*fx+(cy-camY)*fy+(cz-camZ)*fz-bias;
+      opt.depth = dep>0.25 ? dep : 0.25;
+    }
+  }
+  emitPoly(v, lit(col,nx,ny,nz,cy), opt);
+}
+function carDisc(B,o,ox,oy,oz,r,segs,axis,col,out,bias){
+  var pts=[], i;
+  for(i=0;i<segs;i++){
+    var a=(i+0.5)/segs*TAU, u=Math.cos(a)*r, v=Math.sin(a)*r;
+    if(axis==='x')      pts.push([ox, oy+u, oz+v]);
+    else if(axis==='y') pts.push([ox+u, oy, oz+v]);
+    else                pts.push([ox+u, oy+v, oz]);
+  }
+  var ref = axis==='x' ? [ox-out,oy,oz] : axis==='y' ? [ox,oy-out,oz] : [ox,oy,oz-out];
+  carFace(B,o,pts,col,undefined,ref,bias);
+}
+function carHullSec(w,yb,yt){
+  var h=yt-yb;
+  return [[ w*0.80, yb        ], [ w, yb+h*0.22], [ w, yb+h*0.76], [ w*0.88, yt],
+          [-w*0.88, yt        ], [-w, yb+h*0.76], [-w, yb+h*0.22], [-w*0.80, yb]];
+}
+function carHullW(z){
+  var S=CAR_HULL, i;
+  if(z<=S[0].z) return S[0].w;
+  for(i=1;i<S.length;i++) if(z<=S[i].z)
+    return S[i-1].w + (S[i].w-S[i-1].w)*(z-S[i-1].z)/(S[i].z-S[i-1].z);
+  return S[S.length-1].w;
+}
+function carHullDraw(B,o,col,low,archc){
+  var S=CAR_HULL, secs=[], k,i;
+  for(k=0;k<S.length;k++) secs.push(carHullSec(S[k].w,S[k].yb,S[k].yt));
+  for(k=0;k<S.length-1;k++){
+    var A=secs[k], C=secs[k+1], za=S[k].z, zc=S[k+1].z, ar=S[k].arch;
+    for(i=0;i<8;i++){
+      if(i===7) continue;                 /* underside — never in shot */
+      var j=(i+1)%8, cl = (i===0||i===6) ? low
+                        : (ar && (i===1||i===5)) ? archc : col;
+      carFace(B,o,[[A[i][0],A[i][1],za],[A[j][0],A[j][1],za],
+                   [C[j][0],C[j][1],zc],[C[i][0],C[i][1],zc]], cl);
+    }
+  }
+  var f=[], b=[], n=S.length-1;
+  for(i=0;i<8;i++){ f.push([secs[0][i][0],secs[0][i][1],S[0].z]);
+                    b.push([secs[n][i][0],secs[n][i][1],S[n].z]); }
+  carFace(B,o,f,col); carFace(B,o,b,col);
+}
+function carWheel(B,o,x,y,z,spin,tyre,hub){
+  var wc=ptOf(B,o,x,y,z), s=x<0?-1:1;
+  var cs=Math.cos(spin), sn=Math.sin(spin);
+  var Bw={ r:B.r,
+    u:[B.u[0]*cs+B.f[0]*sn, B.u[1]*cs+B.f[1]*sn, B.u[2]*cs+B.f[2]*sn],
+    f:[B.f[0]*cs-B.u[0]*sn, B.f[1]*cs-B.u[1]*sn, B.f[2]*cs-B.u[2]*sn] };
+  meshPrismB(Bw,wc, 0,0,0, CAR_WHR, CAR_WHW, 7, 'x', tyre);
+  carDisc(Bw,wc, s*(CAR_WHW+0.006),0,0, CAR_WHR*0.99, 7,'x', shade(tyre,1.16), s*0.3, 0.12);
+  carDisc(Bw,wc, s*(CAR_WHW+0.018),0,0, CAR_WHR*0.52, 7,'x', hub,               s*0.3, 0.20);
 }
 function render(){
   setCamBasis();
