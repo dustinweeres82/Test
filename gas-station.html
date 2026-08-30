@@ -943,6 +943,7 @@ function handleTap(cx,cy){
 var keys = {};
 window.addEventListener('keydown', function(e){ keys[e.code] = true; });
 window.addEventListener('keyup', function(e){ keys[e.code] = false; });
+window.addEventListener('blur', function(){ keys = {}; });
 
 // ── Virtual joystick (touch) ──────────────────────────────────────────────────
 var joyBase = document.getElementById('joystick');
