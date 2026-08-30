@@ -239,10 +239,12 @@ function smooth(t) { return t * t * (3 - 2 * t); }
 function wrapAng(a) { while (a > PI) a -= TAU; while (a < -PI) a += TAU; return a; }
 function dist2(ax, az, bx, bz) { var dx = ax - bx, dz = az - bz; return Math.sqrt(dx * dx + dz * dz); }
 
+/* 32-bit throughout: plain * overflows the 53-bit float mantissa and the low
+   bits are lost, which skewed every noise value in the world low */
 function hash2(x, y) {
-  var n = (x | 0) * 374761393 + (y | 0) * 668265263;
-  n = (n ^ (n >> 13)) * 1274126177;
-  return ((n ^ (n >> 16)) >>> 0) / 4294967295;
+  var n = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263)) | 0;
+  n = Math.imul(n ^ (n >>> 13), 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
 }
 function vnoise(x, y) {
   var xi = Math.floor(x), yi = Math.floor(y), xf = smooth(x - xi), yf = smooth(y - yi);
@@ -779,6 +781,98 @@ function sprite(x, y, z, drawFn, depthBias) {
   dlPush(d + (depthBias || 0), { f: function () { drawFn(sx, sy, sc, fogT, d); } });
 }
 /* ═══════════════════════════════════════════════════════════════════════════
+   3b. LOW-POLY MESH KIT — faceted cones, prisms and boulders
+   ═══════════════════════════════════════════════════════════════════════════ */
+/* emit one face, working out which way it should be lit from the shape centre */
+function emitFaceC(v, col, dd, ox, oy, oz) {
+  var n = v.length / 3, i;
+  var e1x = v[3]-v[0], e1y = v[4]-v[1], e1z = v[5]-v[2];
+  var e2x = v[6]-v[0], e2y = v[7]-v[1], e2z = v[8]-v[2];
+  var nx = e1y*e2z - e1z*e2y, ny = e1z*e2x - e1x*e2z, nz = e1x*e2y - e1y*e2x;
+  var cx = 0, cy = 0, cz = 0;
+  for (i = 0; i < n; i++) { cx += v[i*3]; cy += v[i*3+1]; cz += v[i*3+2]; }
+  cx /= n; cy /= n; cz /= n;
+  if ((cx - ox) * nx + (cy - oy) * ny + (cz - oz) * nz < 0) { nx = -nx; ny = -ny; nz = -nz; }
+  if ((cx - camX) * nx + (cy - camY) * ny + (cz - camZ) * nz > 0) return;   /* backface */
+  emitPoly(v, lit(col, nx, ny, nz), { depth: dd, seam: true });
+}
+/* a cone: the building block of every conifer in the valley */
+function meshCone(x, y, z, r, h, segs, col, dd, twist) {
+  var ay = y + h, i;
+  for (i = 0; i < segs; i++) {
+    var a0 = (i / segs) * TAU + twist, a1 = ((i + 1) / segs) * TAU + twist;
+    emitFaceC([x + Math.cos(a1) * r, y, z + Math.sin(a1) * r,
+               x + Math.cos(a0) * r, y, z + Math.sin(a0) * r,
+               x, ay, z], col, dd, x, y + h * 0.35, z);
+  }
+}
+/* a prism — trunks standing up, logs lying down */
+function meshPrism(x, y, z, r, h, segs, col, capCol, dd, twist, taper) {
+  var i, tp = taper === undefined ? 1 : taper, top = [];
+  for (i = 0; i < segs; i++) {
+    var a0 = (i / segs) * TAU + twist, a1 = ((i + 1) / segs) * TAU + twist;
+    var x0 = x + Math.cos(a0) * r, z0 = z + Math.sin(a0) * r;
+    var x1 = x + Math.cos(a1) * r, z1 = z + Math.sin(a1) * r;
+    var tx0 = x + Math.cos(a0) * r * tp, tz0 = z + Math.sin(a0) * r * tp;
+    var tx1 = x + Math.cos(a1) * r * tp, tz1 = z + Math.sin(a1) * r * tp;
+    emitFaceC([x1, y, z1, x0, y, z0, tx0, y + h, tz0, tx1, y + h, tz1], col, dd, x, y + h / 2, z);
+  }
+  if (capCol) {
+    var cap = [];
+    for (i = segs - 1; i >= 0; i--) {
+      var a = (i / segs) * TAU + twist;
+      cap.push(x + Math.cos(a) * r * tp, y + h, z + Math.sin(a) * r * tp);
+    }
+    emitFaceC(cap, capCol, dd, x, y + h / 2, z);
+  }
+}
+/* icosahedron, jittered per instance — boulders and round canopies */
+var ICO_V = (function () {
+  var p = 1.6180339887, v = [[-1,p,0],[1,p,0],[-1,-p,0],[1,-p,0],[0,-1,p],[0,1,p],
+                             [0,-1,-p],[0,1,-p],[p,0,-1],[p,0,1],[-p,0,-1],[-p,0,1]];
+  return v.map(function (a) { var L = Math.sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
+                              return [a[0]/L, a[1]/L, a[2]/L]; });
+})();
+var ICO_F = [[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],
+             [10,7,6],[7,1,8],[3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],
+             [2,4,11],[6,2,10],[8,6,7],[9,8,1]];
+function meshBlob(x, y, z, rx, ry, rz, seed, col, dd, squash) {
+  var rnd = rngFrom(seed), pts = [], i;
+  for (i = 0; i < ICO_V.length; i++) {
+    var j = 0.78 + rnd() * 0.44;
+    var vy = ICO_V[i][1];
+    if (squash) vy = vy < 0 ? vy * squash : vy;
+    pts.push([x + ICO_V[i][0] * rx * j, y + vy * ry * j, z + ICO_V[i][2] * rz * j]);
+  }
+  for (i = 0; i < ICO_F.length; i++) {
+    var F = ICO_F[i], a = pts[F[0]], b = pts[F[1]], c = pts[F[2]];
+    emitFaceC([a[0],a[1],a[2], b[0],b[1],b[2], c[0],c[1],c[2]], col, dd, x, y, z);
+  }
+}
+/* a felled log: hexagonal prism on its side, with pale end grain */
+function meshLog(x, y, z, yaw, r, len, col, capCol, dd) {
+  var fx2 = Math.sin(yaw), fz2 = Math.cos(yaw), segs = 6, i;
+  var ux2 = 0, uy2 = 1, uz2 = 0;
+  var rx2 = fz2, rz2 = -fx2;
+  function P(t, a) {
+    return [x + fx2 * t + rx2 * Math.cos(a) * r, y + r + Math.sin(a) * r, z + fz2 * t + rz2 * Math.cos(a) * r];
+  }
+  for (i = 0; i < segs; i++) {
+    var a0 = (i / segs) * TAU + 0.4, a1 = ((i + 1) / segs) * TAU + 0.4;
+    var p0 = P(-len / 2, a0), p1 = P(-len / 2, a1), q1 = P(len / 2, a1), q0 = P(len / 2, a0);
+    emitFaceC([p0[0],p0[1],p0[2], p1[0],p1[1],p1[2], q1[0],q1[1],q1[2], q0[0],q0[1],q0[2]],
+              col, dd, x, y + r, z);
+  }
+  for (var e = -1; e <= 1; e += 2) {
+    var cap = [];
+    for (i = 0; i < segs; i++) {
+      var a = (i / segs) * TAU + 0.4, pp = P(e * len / 2, a);
+      cap.push(pp[0], pp[1], pp[2]);
+    }
+    emitFaceC(cap, capCol, dd, x, y + r, z);
+  }
+}
+/* ═══════════════════════════════════════════════════════════════════════════
    4. VEGETATION & SCATTER
    ═══════════════════════════════════════════════════════════════════════════ */
 function fogCol(c, t) { return css(mixc(c, sky.fog, t * 0.92)); }
@@ -795,7 +889,7 @@ function shadowAt(x, y, z, rad, alpha) {
   }, 0.6);
 }
 /* the tall dark cypresses that punctuate every hillside */
-function drawCypress(p) {
+function drawCypressFar(p) {
   var h = p.h, w = h * 0.16;
   shadowAt(p.x, p.y, p.z, w * 1.5, 0.34);
   sprite(p.x, p.y, p.z, function (sx, sy, sc, ft) {
@@ -825,7 +919,7 @@ function drawCypress(p) {
     }
   });
 }
-function drawPine(p) {
+function drawPineFar(p) {
   var h = p.h;
   shadowAt(p.x, p.y, p.z, h * 0.26, 0.3);
   sprite(p.x, p.y, p.z, function (sx, sy, sc, ft) {
@@ -848,7 +942,7 @@ function drawPine(p) {
     }
   });
 }
-function drawBroad(p) {          /* olive / oak — the round painterly ones */
+function drawBroadFar(p) {          /* olive / oak — the round painterly ones */
   var h = p.h, rnd = rngFrom(p.seed);
   var lobes = [];
   for (var i = 0; i < 5; i++) lobes.push([(rnd() - 0.5) * 0.9, -(0.55 + rnd() * 0.42), 0.30 + rnd() * 0.22]);
@@ -869,7 +963,7 @@ function drawBroad(p) {          /* olive / oak — the round painterly ones */
     }
   });
 }
-function drawBush(p) {
+function drawBushFar(p) {
   var h = p.h, flower = p.flower;
   sprite(p.x, p.y, p.z, function (sx, sy, sc, ft) {
     var H1 = h * sc;
@@ -883,7 +977,7 @@ function drawBush(p) {
     }
   });
 }
-function drawRock(p) {
+function drawRockFar(p) {
   var h = p.h, rnd = rngFrom(p.seed), pts = [];
   for (var i = 0; i < 7; i++) { var a = i / 7 * TAU; var r = 0.62 + rnd() * 0.5;
     pts.push([Math.cos(a) * r, -Math.abs(Math.sin(a)) * r * 0.86]); }
@@ -909,7 +1003,75 @@ function drawVine(p) {
     blob(sx, sy - H1 * 0.75, H1 * 0.42, H1 * 0.34);
   });
 }
-var PROPDRAW = { cyp: drawCypress, pine: drawPine, broad: drawBroad, bush: drawBush, rock: drawRock, vine: drawVine };
+/* ── solid, faceted versions for anything close enough to see ───────────── */
+var C_BARK = [122,84,60], C_BARK2 = [96,64,46], C_GRAIN = [196,150,112];
+function propDist(p) { var dx = p.x - camX, dz = p.z - camZ; return Math.sqrt(dx * dx + dz * dz); }
+
+function drawPine(p) {
+  var d = propDist(p);
+  if (d > 165) return drawPineFar(p);
+  var lod = d < 78, segs = lod ? 8 : 6, tiers = lod ? 5 : 3;
+  var h = p.h, trunkH = h * 0.20, tw = h * 0.030;
+  shadowAt(p.x, p.y, p.z, h * 0.24, 0.30);
+  meshPrism(p.x, p.y, p.z, tw, trunkH * 1.15, 6, C_BARK, null, d, p.seed * 0.7, 0.8);
+  var greens = [[92,132,66],[74,116,56],[60,100,50]];
+  for (var t = 0; t < tiers; t++) {
+    var f = t / tiers;
+    var base = p.y + trunkH + f * (h - trunkH) * 0.80;
+    var r = h * (0.34 - f * 0.20), th = (h - trunkH) * (0.44 - f * 0.10);
+    meshCone(p.x, base, p.z, r, th, segs, greens[t % 3], d - t * 0.01, p.seed + t * 0.9);
+  }
+}
+function drawCypress(p) {
+  var d = propDist(p);
+  if (d > 165) return drawCypressFar(p);
+  var lod = d < 78, segs = lod ? 7 : 5;
+  var h = p.h, r = h * 0.13;
+  shadowAt(p.x, p.y, p.z, r * 1.6, 0.32);
+  meshPrism(p.x, p.y, p.z, r * 0.35, h * 0.16, 6, C_BARK, null, d, p.seed, 0.9);
+  /* a fat lower cone with a slim spire on top reads as a cypress */
+  meshPrism(p.x, p.y + h * 0.10, p.z, r, h * 0.44, segs, [56,96,54], null, d, p.seed * 0.3, 0.86);
+  meshCone(p.x, p.y + h * 0.54, p.z, r * 0.86, h * 0.50, segs, [48,88,50], d, p.seed * 0.3);
+}
+function drawBroad(p) {
+  var d = propDist(p);
+  if (d > 165) return drawBroadFar(p);
+  var h = p.h, lod = d < 78;
+  shadowAt(p.x, p.y, p.z, h * 0.34, 0.30);
+  meshPrism(p.x, p.y, p.z, h * 0.055, h * 0.46, 6, C_BARK, null, d, p.seed, 0.8);
+  var cy = p.y + h * 0.66, rr = h * 0.34;
+  meshBlob(p.x, cy, p.z, rr, rr * 0.86, rr, p.seed * 13 + 1, [86,126,62], d, 0.8);
+  if (lod) {
+    meshBlob(p.x - rr * 0.62, cy + rr * 0.30, p.z + rr * 0.24, rr * 0.62, rr * 0.56, rr * 0.62,
+             p.seed * 7 + 5, [104,146,70], d - 0.02, 0.9);
+    meshBlob(p.x + rr * 0.54, cy - rr * 0.10, p.z - rr * 0.30, rr * 0.56, rr * 0.52, rr * 0.56,
+             p.seed * 3 + 9, [70,110,56], d + 0.02, 0.9);
+  }
+}
+function drawBush(p) {
+  var d = propDist(p);
+  if (d > 120) return drawBushFar(p);
+  var h = p.h;
+  meshBlob(p.x, p.y + h * 0.52, p.z, h * 0.55, h * 0.50, h * 0.55, p.seed * 5 + 3, [84,120,58], d, 0.8);
+  if (p.flower && d < 70)
+    meshBlob(p.x + h * 0.18, p.y + h * 0.85, p.z, h * 0.24, h * 0.19, h * 0.24, p.seed + 2,
+             p.flower === 1 ? [230,152,182] : [234,212,146], d - 0.02, 0.8);
+}
+function drawRock(p) {
+  var d = propDist(p);
+  if (d > 150) return drawRockFar(p);
+  var h = p.h;
+  shadowAt(p.x, p.y, p.z, h * 0.7, 0.28);
+  meshBlob(p.x, p.y + h * 0.34, p.z, h * 0.72, h * 0.52, h * 0.64, p.seed * 11 + 7, [172,168,158], d, 0.35);
+}
+function drawLog(p) {
+  var d = propDist(p);
+  if (d > 150) return;
+  shadowAt(p.x, p.y, p.z, p.h * 0.9, 0.28);
+  meshLog(p.x, p.y, p.z, p.yaw, p.h * 0.26, p.h * 2.1, C_BARK2, C_GRAIN, d);
+}
+var PROPDRAW = { cyp: drawCypress, pine: drawPine, broad: drawBroad, bush: drawBush,
+                 rock: drawRock, vine: drawVine, log: drawLog };
 
 /* deterministic scatter, cached per 20m cell */
 var SC = 20, propCache = {}, propCacheN = 0;
@@ -939,7 +1101,8 @@ function cellProps(ci, cj) {
     } else if (forest > 0.56) {
       if (r < 0.62) { p.type = 'pine'; p.h = 9 + rnd() * 11; }
       else if (r < 0.76) { p.type = 'bush'; p.h = 1.5 + rnd() * 1.6; }
-      else if (r < 0.82) { p.type = 'rock'; p.h = 1.1 + rnd() * 2.2; }
+      else if (r < 0.80) { p.type = 'rock'; p.h = 1.1 + rnd() * 2.2; }
+      else if (r < 0.86) { p.type = 'log'; p.h = 1.0 + rnd() * 0.7; p.yaw = rnd() * TAU; }
       else continue;
     } else {
       if (r < 0.11) { p.type = 'broad'; p.h = (ri.d < 20 ? 5 : 6) + rnd() * (ri.d < 20 ? 2.5 : 5); }
@@ -1085,7 +1248,7 @@ function drawBuilding(o) {
     sprite(o.x, o.y + 2.35, o.z, function (sx, sy, sc, ft) {
       if (sc < 4) return;
       ctx.fillStyle = 'rgba(246,238,222,' + (1 - ft) + ')';
-      ctx.font = 'bold ' + Math.max(6, sc * 0.42) + 'px Georgia, serif';
+      ctx.font = 'bold ' + clamp(sc * 0.42, 6, 26) + 'px Georgia, serif';
       ctx.textAlign = 'center'; ctx.fillText(o.label.toUpperCase(), sx + sc * 0.85, sy + sc * 0.14);
       ctx.textAlign = 'left';
     }, -1);
@@ -1209,7 +1372,7 @@ var C_RED = [198,66,50], C_RED2 = [162,44,36], C_CREAM = [246,238,220], C_DARK =
 var P = {
   x: 12, y: 0, z: -26, yaw: PI, pitch: 0, roll: 0,
   spd: 0, vy: 0, flying: false, wing: 0, throttle: 0,
-  hp: 100, fuel: 100, wheelSpin: 0, prop: 0, bank: 0, gunHeat: 0, liftoff: 0
+  hp: 100, fuel: 100, wheelSpin: 0, prop: 0, bank: 0, gunHeat: 0, liftoff: 0, onFoot: false
 };
 function drawAires() {
   var B = basis(P.yaw, P.pitch, P.roll), o = [P.x, P.y, P.z], w = P.wing;
@@ -1297,6 +1460,24 @@ function drawAires() {
     drawBox(B, o, lane + jitter, 1.34 + tier * 0.42 + hh, -1.14 - tier * 0.06, 0.26, hh, 0.40, col);
     drawBox(B, o, lane + jitter, 1.34 + tier * 0.42 + hh * 2 - 0.02, -1.14 - tier * 0.06,
             0.28, 0.03, 0.42, [122,94,66]);
+  }
+}
+/* the rider, on foot, possibly hugging a crate */
+function drawWalker() {
+  var sp = SPECIES.rider, sc = sp.h;
+  var B = basis(FOOT.yaw, 0, 0);
+  shadowAt(FOOT.x, groundH(FOOT.x, FOOT.z), FOOT.z, 0.36 * sc, 0.34);
+  drawVillager(B, [FOOT.x, FOOT.y, FOOT.z], sc, sp.p, FOOT.walk, false);
+  if (FOOT.carry) {
+    var j = FOOT.carry, o = [FOOT.x, FOOT.y, FOOT.z];
+    var hh = 0.14 + Math.min(j.weight, 90) * 0.0022;
+    var col = j.kind === 'fragile' ? [228,216,190] : j.kind === 'lively' ? [178,144,98]
+            : j.kind === 'volatile' ? [200,122,66] : [208,174,120];
+    var jit = j.kind === 'lively' ? Math.sin(gTime * 6) * 0.03 : 0;
+    drawBox(B, o, jit, 0.62 * sc + hh, 0.34 * sc, 0.24 * sc, hh, 0.16 * sc, col);
+    drawBox(B, o, jit, 0.62 * sc + hh * 2 - 0.02, 0.34 * sc, 0.25 * sc, 0.02 * sc, 0.17 * sc, [122,94,66]);
+    for (var i = -1; i <= 1; i += 2)      /* arms around it */
+      drawBox(B, o, i * 0.26 * sc, 0.66 * sc, 0.26 * sc, 0.05 * sc, 0.05 * sc, 0.14 * sc, sp.p.body);
   }
 }
 /* dust, smoke, sparks */
@@ -1594,6 +1775,7 @@ function phaseName() {
        : dayT < 0.84 ? 'Evening' : 'Night';
 }
 function newDay(restQuality) {
+  if (P.onFoot) remount();
   day++;
   dayT = 0.08;
   pirateIntel = false;
@@ -1670,6 +1852,7 @@ function setupTouch() {
 /* ═══════════════════════════════════════════════════════════════════════════
    10. PHYSICS — roads and air
    ═══════════════════════════════════════════════════════════════════════════ */
+var FOOT = { x: 0, y: 0, z: 0, yaw: 0, walk: 0, carry: null };
 var shakeAmt = 0, reverseHold = 0, reversing = false, dustTimer = 0, gunTimer = 0, lastSpaceState = false, engineHum = 0;
 function inputs() {
   var i = { thr: 0, brk: 0, steer: 0, pitch: 0, fire: false, act: false };
@@ -1702,7 +1885,40 @@ function nearPad() {
   }
   return null;
 }
+/* wherever you are actually standing — on the bike, or beside it */
+function here() { return P.onFoot ? FOOT : P; }
+function dismount(job) {
+  P.onFoot = true; P.spd = 0;
+  var side = P.yaw + PI / 2;
+  FOOT.x = P.x + Math.sin(side) * 1.6; FOOT.z = P.z + Math.cos(side) * 1.6;
+  FOOT.y = groundH(FOOT.x, FOOT.z); FOOT.yaw = P.yaw; FOOT.walk = 0; FOOT.carry = job || null;
+}
+function remount() { P.onFoot = false; FOOT.carry = null; camInit = false; }
+/* who is expecting this parcel, and where are they standing? */
+function recipientAt(L) {
+  for (var i = 0; i < CRITTERS.length; i++)
+    if (CRITTERS[i].res && CRITTERS[i].res.loc === L.id) return CRITTERS[i];
+  return { x: L.px, y: L.y || groundH(L.px, L.pz), z: L.pz, name: 'the door', doorway: true };
+}
+function updateFoot(dt) {
+  var I = inputs();
+  FOOT.yaw += I.steer * 2.8 * dt;
+  var mv = (I.thr ? 1 : 0) - (I.brk ? 0.65 : 0);
+  if (mv !== 0) {
+    var sp = 3.6 * (FOOT.carry ? 0.82 : 1);
+    FOOT.x += Math.sin(FOOT.yaw) * sp * mv * dt;
+    FOOT.z += Math.cos(FOOT.yaw) * sp * mv * dt;
+    FOOT.walk += dt * 8 * Math.abs(mv);
+  }
+  FOOT.y = lerp(FOOT.y, groundH(FOOT.x, FOOT.z), clamp(14 * dt, 0, 1));
+  dayT += dt / DAY_LEN;
+  stamina = clamp(stamina - dt / (DAY_LEN * 1.6), 0, 1);
+  if (dayT >= 1) { dayT = 1; nightfall(); }
+  /* wandered too far from Aires? she worries. */
+  if (dist2(FOOT.x, FOOT.z, P.x, P.z) > 90) warn('AIRES IS GETTING LONELY');
+}
 function updatePlayer(dt) {
+  if (P.onFoot) { updateFoot(dt); return; }
   var I = inputs();
   var gy = groundH(P.x, P.z);
   var dead = P.fuel <= 0;
@@ -1934,6 +2150,12 @@ function drawVillager(B, o, s, Q, walk, lod) {
     drawBox(B, o, 0, hy - hd * 0.04, hd * 0.40 + bl2 * 0.5, hd * 0.13, hd * 0.10, bl2 * 0.5, Q.beak);
     if (Q.pouch) drawBox(B, o, 0, hy - hd * 0.22, hd * 0.40 + bl2 * 0.45, hd * 0.16, hd * 0.14, bl2 * 0.42, Q.pouchCol);
     if (Q.comb) drawBox(B, o, 0, hy + hd * 0.50, hd * 0.06, hd * 0.05, hd * 0.16, hd * 0.20, [198,66,54]);
+  } else if (Q.feat === 'human') {
+    drawBox(B, o, 0, hy - hd * 0.02, hd * 0.42, hd * 0.06, hd * 0.07, hd * 0.05, Q.head);
+    if (Q.cap) {
+      drawBox(B, o, 0, hy + hd * 0.44, 0, hd * 0.44, hd * 0.12, hd * 0.42, Q.cap);
+      drawBox(B, o, 0, hy + hd * 0.34, hd * 0.30, hd * 0.40, hd * 0.06, hd * 0.16, Q.cap);
+    }
   } else if (Q.feat !== 'shell') {
     var ml = Q.muzzle || 0.22;
     drawBox(B, o, 0, hy - hd * 0.10, hd * 0.40 + ml * hd * 0.5, hd * 0.20, hd * 0.15, ml * hd * 0.5,
@@ -2003,6 +2225,8 @@ var SPECIES = {
   sheep:    { h: 1.16, p: { feat:'fur', ear:'round', tail:'stub', muzzle:0.20, wide:true,
               body:[244,240,232], head:[92,86,82], snout:[120,112,106], wool:[250,248,242],
               legCol:[86,80,76], cloth:CLOTHES[4] } },
+  rider:    { h: 1.60, p: { feat:'human', body:[228,180,144], head:[234,188,152],
+              cloth:[86,116,158], legCol:[238,230,212], footCol:[112,82,58], cap:[196,74,58] } },
   tortoise: { h: 1.04, p: { feat:'shell', ear:'none', muzzle:0.20, body:[152,160,118],
               head:[158,166,124], shell:[128,106,64], shell2:[98,82,52], plastron:[216,196,138],
               legCol:[136,144,104], cloth:CLOTHES[3] } }
@@ -2039,9 +2263,9 @@ function drawCritter(c) {
 }
 var nearestNamed = null;
 function faceThePlayer(c, dt) {
-  var pd = dist2(c.x, c.z, P.x, P.z);
+  var h = here(), pd = dist2(c.x, c.z, h.x, h.z);
   if (pd < 16 && !P.flying) {
-    var toYou = Math.atan2(P.x - c.x, P.z - c.z);
+    var toYou = Math.atan2(h.x - c.x, h.z - c.z);
     c.yaw += wrapAng(toYou - c.yaw) * clamp(1.8 * dt, 0, 1);
   }
 }
@@ -2156,7 +2380,7 @@ function spawnWanderers() {
 }
 function nearWanderer() {
   for (var i = 0; i < WANDERERS.length; i++)
-    if (dist2(P.x, P.z, WANDERERS[i].x, WANDERERS[i].z) < 14 && !P.flying) return WANDERERS[i];
+    if (dist2(here().x, here().z, WANDERERS[i].x, WANDERERS[i].z) < 14 && !P.flying) return WANDERERS[i];
   return null;
 }
 function dropWanderer(w) {
@@ -2301,9 +2525,9 @@ function showSheet(title, sub, opts) {
 }
 function closeSheet() { sheetOpen = false; veil.classList.remove('on'); sheetEl.innerHTML = ''; }
 function nearestLoc() {
-  var best = null, bd = 1e9;
+  var best = null, bd = 1e9, h = here();
   for (var i = 0; i < LOCS.length; i++) {
-    var d = dist2(P.x, P.z, LOCS[i].x, LOCS[i].z);
+    var d = dist2(h.x, h.z, LOCS[i].x, LOCS[i].z);
     if (d < bd) { bd = d; best = LOCS[i]; }
   }
   return best && bd < best.r * 1.6 ? best : null;
@@ -2333,6 +2557,7 @@ function towOption() {
 }
 function interact() {
   if (titleUp || gameOver) return;
+  if (P.onFoot) { footInteract(); return; }
   var w = nearWanderer();
   if (w) { wandererSheet(w); return; }
   var L = nearestLoc();
@@ -2345,21 +2570,64 @@ function interact() {
   }
   openLocation(L);
 }
+function footInteract() {
+  var L = nearestLoc();
+  var rec = L ? recipientAt(L) : null;
+  if (FOOT.carry && rec && dist2(FOOT.x, FOOT.z, rec.x, rec.z) < 3.4) { handOverSheet(L, rec); return; }
+  if (dist2(FOOT.x, FOOT.z, P.x, P.z) < 4.5) { bikesideSheet(L); return; }
+  var w = nearWanderer();
+  if (w) { wandererSheet(w); return; }
+  if (FOOT.carry && rec) toast('Take it to ' + rec.name + ' — ' + Math.round(dist2(FOOT.x, FOOT.z, rec.x, rec.z)) + ' m');
+  else toast('Aires is parked ' + Math.round(dist2(FOOT.x, FOOT.z, P.x, P.z)) + ' m back.');
+}
+function handOverSheet(L, rec) {
+  var j = FOOT.carry;
+  var payout = Math.round(j.pay * (0.35 + 0.65 * j.cond / 100));
+  var host = residentOf(L);
+  showSheet(rec.name, host ? '“' + say(host) + '”' : 'They take the parcel with both hands.', [
+    { t: 'Hand over ' + j.name, right: '+' + money$(payout),
+      d: j.weight + ' kg · condition ' + Math.round(j.cond) + '%' +
+         (j.cond < 70 ? ' — they turn it over, frowning' : ''),
+      fn: function () {
+        var i = HOLD.indexOf(j); if (i >= 0) HOLD.splice(i, 1);
+        FOOT.carry = null; money += payout; stats.deliveries++;
+        stamina = clamp(stamina + 0.04, 0, 1);
+        closeSheet();
+        toast(rec.name + ' signs for it. +' + money$(payout));
+      } },
+    { t: 'Not just yet', fn: closeSheet }
+  ]);
+}
+function bikesideSheet(L) {
+  var opts = [], drop = L ? deliverablesAt(L) : [];
+  if (FOOT.carry) opts.push({ t: 'Put ' + FOOT.carry.name + ' back on the rack',
+    d: 'It goes back in the stack.', fn: function () { FOOT.carry = null; closeSheet(); } });
+  for (var i = 0; i < drop.length; i++) (function (job) {
+    if (FOOT.carry === job) return;
+    var rec = recipientAt(L);
+    opts.push({ t: 'Take ' + job.name + ' off the rack', right: '+' + money$(job.pay),
+      d: 'For ' + rec.name + ', ' + Math.round(dist2(P.x, P.z, rec.x, rec.z)) + ' m across the yard.',
+      dis: !!FOOT.carry,
+      fn: function () { FOOT.carry = job; closeSheet(); toast('Carry it to ' + rec.name + '.'); } });
+  })(drop[i]);
+  opts.push({ rule: true });
+  opts.push({ t: 'Get back on Aires', d: FOOT.carry ? 'The parcel goes back on the rack first.'
+                                                    : 'Saddle up.', fn: function () { remount(); closeSheet(); } });
+  showSheet('Aires', 'Parked, ticking as she cools.', opts);
+}
 function openLocation(L) {
-  var opts = [], drop = deliverablesAt(L);
+  var opts = [], drop = deliverablesAt(L), rec = recipientAt(L);
   for (var i = 0; i < drop.length; i++) {
     (function (job) {
-      var payout = Math.round(job.pay * (0.35 + 0.65 * job.cond / 100) * (job.rush && day <= job.due ? 1 : 1));
-      opts.push({ t: 'Hand over ' + job.name, right: '+' + money$(payout),
+      var payout = Math.round(job.pay * (0.35 + 0.65 * job.cond / 100));
+      opts.push({ t: 'Unload ' + job.name + ' and carry it in', right: '+' + money$(payout),
         d: '<span class="tag">' + job.kindLabel + '</span>' + job.weight + ' kg · condition '
-           + Math.round(job.cond) + '%' + (job.cond < 70 ? ' — they will notice' : ''),
+           + Math.round(job.cond) + '% · ' + rec.name + ' is waiting '
+           + Math.round(dist2(P.x, P.z, rec.x, rec.z)) + ' m away',
+        dis: Math.abs(P.spd) > 2,
         fn: function () {
-          HOLD.splice(HOLD.indexOf(job), 1);
-          money += payout; stats.deliveries++;
-          stamina = clamp(stamina + 0.04, 0, 1);
-          closeSheet();
-          var host2 = residentOf(L);
-          toast(host2 ? host2.name + ' signs for it. +' + money$(payout) : 'Delivered! +' + money$(payout));
+          closeSheet(); dismount(job);
+          toast('Carry it to ' + rec.name + '. <kbd>E</kbd> when you are beside them.');
         } });
     })(drop[i]);
   }
@@ -2534,7 +2802,8 @@ function showMap() {
 /* shared by the map sheet and the corner badge */
 function drawMapInto(g, w, h, big) {
   var span = big ? 2100 : 620;
-  var cx = big ? 100 : P.x, cz = big ? 150 : P.z, sc = Math.min(w, h) / span;
+  var _me = (typeof here === 'function') ? here() : P;
+  var cx = big ? 100 : _me.x, cz = big ? 150 : _me.z, sc = Math.min(w, h) / span;
   function mx(x) { return w / 2 + (x - cx) * sc; }
   function mz(z) { return h / 2 - (z - cz) * sc; }
   g.clearRect(0, 0, w, h);
@@ -2576,8 +2845,9 @@ function drawMapInto(g, w, h, big) {
     g.beginPath(); g.arc(mx(PIRATES[pi].x), mz(PIRATES[pi].z), big ? 4 : 2.5, 0, TAU); g.fill();
   }
   /* you */
-  var px2 = mx(P.x), py2 = mz(P.z);
-  g.save(); g.translate(px2, py2); g.rotate(P.yaw);
+  var me = (typeof here === 'function') ? here() : P;
+  var px2 = mx(me.x), py2 = mz(me.z);
+  g.save(); g.translate(px2, py2); g.rotate(me.yaw);
   g.fillStyle = P.flying ? '#3d7bbf' : '#c1452f';
   g.beginPath(); g.moveTo(0, -(big ? 9 : 7)); g.lineTo(big ? 6 : 5, big ? 7 : 5);
   g.lineTo(0, big ? 3 : 2); g.lineTo(-(big ? 6 : 5), big ? 7 : 5); g.closePath(); g.fill();
@@ -2645,7 +2915,19 @@ function updateHUD(dt) {
     E.objective.textContent = objectiveText();
     var L = nearestLoc(), w2 = nearWanderer();
     E.badgeLbl.textContent = L ? L.name : (P.flying ? 'In the air' : 'The open road');
-    if (w2 && !sheetOpen) {
+    if (P.onFoot && !sheetOpen) {
+      var rc = L ? recipientAt(L) : null;
+      var toBike = dist2(FOOT.x, FOOT.z, P.x, P.z);
+      E.prompt.style.opacity = 1;
+      if (FOOT.carry && rc && dist2(FOOT.x, FOOT.z, rc.x, rc.z) < 3.4)
+        E.promptTxt.innerHTML = 'Hand it to ' + rc.name;
+      else if (toBike < 4.5)
+        E.promptTxt.innerHTML = FOOT.carry ? 'Put it back, or ride on' : 'Back on Aires';
+      else if (w2) E.promptTxt.innerHTML = 'Talk to ' + w2.name;
+      else if (FOOT.carry && rc)
+        E.promptTxt.innerHTML = 'Carry it to ' + rc.name + ' — ' + Math.round(dist2(FOOT.x, FOOT.z, rc.x, rc.z)) + ' m';
+      else E.promptTxt.innerHTML = 'Aires is ' + Math.round(toBike) + ' m back';
+    } else if (w2 && !sheetOpen) {
       E.prompt.style.opacity = 1;
       E.promptTxt.innerHTML = 'Talk to ' + w2.name;
     } else if (L && !sheetOpen) {
@@ -2662,8 +2944,10 @@ function updateHUD(dt) {
     if (!HOLD.length) html = '<div class="row"><s>Empty — visit a red job sign</s></div>';
     if (HOLD.length > 4) html += '<div class="row"><s>+' + (HOLD.length - 4) + ' more…</s></div>';
     E.cargoList.innerHTML = html;
-    E.cargoWt.innerHTML = Math.round(cargoWt()) + ' / ' + rackCap() + ' kg &nbsp;·&nbsp; '
-      + (canFly() ? '<b style="color:#4d8233">flight ready</b>' : '<b style="color:#c1452f">too heavy to fly</b>');
+    E.cargoWt.innerHTML = P.onFoot
+      ? (FOOT.carry ? '<b>Carrying ' + FOOT.carry.name + '</b>' : 'On foot &mdash; hands empty')
+      : Math.round(cargoWt()) + ' / ' + rackCap() + ' kg &nbsp;·&nbsp; '
+        + (canFly() ? '<b style="color:#4d8233">flight ready</b>' : '<b style="color:#c1452f">too heavy to fly</b>');
   }
   miniT -= dt;
   if (miniT <= 0) { miniT = 0.2; drawMapInto(miniCtx, 132, 132, false); }
@@ -2671,6 +2955,30 @@ function updateHUD(dt) {
 /* floating destination markers */
 function drawWaypoints() {
   var seen = {};
+  if (P.onFoot && FOOT.carry) {                       /* the doorstep you are aiming for */
+    var L2 = nearestLoc();
+    if (L2) {
+      var rec = recipientAt(L2);
+      if (project(rec.x, rec.y + 1.9, rec.z)) {
+        var rx2 = _px, ry2 = _py, nm = rec.name;
+        var rd2 = dist2(FOOT.x, FOOT.z, rec.x, rec.z);
+        dlPush(-3, { f: function () {
+          var bob = Math.sin(gTime * 3) * 3;
+          ctx.fillStyle = '#c1452f';
+          ctx.beginPath();
+          ctx.moveTo(rx2, ry2 + bob); ctx.lineTo(rx2 + 7, ry2 - 9 + bob);
+          ctx.lineTo(rx2, ry2 - 18 + bob); ctx.lineTo(rx2 - 7, ry2 - 9 + bob);
+          ctx.closePath(); ctx.fill();
+          ctx.strokeStyle = 'rgba(255,245,225,.9)'; ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.font = '12px Georgia, serif'; ctx.textAlign = 'center';
+          var t = nm + '  ' + Math.round(rd2) + ' m', w = ctx.measureText(t).width;
+          ctx.fillStyle = 'rgba(30,22,14,.55)'; ctx.fillRect(rx2 - w/2 - 5, ry2 - 38 + bob, w + 10, 17);
+          ctx.fillStyle = '#fff4e0'; ctx.fillText(t, rx2, ry2 - 26 + bob);
+          ctx.textAlign = 'left';
+        } });
+      }
+    }
+  }
   for (var i = 0; i < HOLD.length; i++) {
     var L = loc(HOLD[i].to);
     if (seen[L.id]) continue; seen[L.id] = 1;
@@ -2703,16 +3011,19 @@ function drawWaypoints() {
    ═══════════════════════════════════════════════════════════════════════════ */
 var camInit = false;
 function updateCamera(dt) {
-  var back = P.flying ? 11.5 : 8.8, up = P.flying ? 3.3 : 3.0;
+  var T = P.onFoot ? FOOT : P;
+  var back = P.onFoot ? 5.6 : (P.flying ? 11.5 : 8.8);
+  var up   = P.onFoot ? 2.6 : (P.flying ? 3.3 : 3.0);
   var k = camInit ? clamp((P.flying ? 3.4 : 6.5) * dt, 0, 1) : 1;
-  camYaw += wrapAng(P.yaw - camYaw) * k;
-  var lookAt = P.y + 1.3, drop = (camY - lookAt) / Math.max(back, 4);
-  var wantPitch = -Math.atan(drop) - 0.02 + (P.flying ? P.pitch * 0.40 : clamp(P.pitch, -0.5, 0.5) * 0.28);
+  camYaw += wrapAng(T.yaw - camYaw) * k;
+  var lookAt = T.y + (P.onFoot ? 1.1 : 1.3), drop = (camY - lookAt) / Math.max(back, 4);
+  var wantPitch = -Math.atan(drop) - 0.02 +
+                  (P.onFoot ? 0 : (P.flying ? P.pitch * 0.40 : clamp(P.pitch, -0.5, 0.5) * 0.28));
   camPitch += (wantPitch - camPitch) * (camInit ? clamp(4 * dt, 0, 1) : 1);
-  camRoll += (P.roll * 0.30 - camRoll) * (camInit ? clamp(5 * dt, 0, 1) : 1);
-  var tx = P.x - Math.sin(camYaw) * back, tz = P.z - Math.cos(camYaw) * back;
-  var ty = P.y + up + (P.flying ? 0 : 0.4);
-  if (!P.flying) ty = Math.max(ty, groundH(tx, tz) + 2.6);   /* stay above the slope behind us */
+  camRoll += ((P.onFoot ? 0 : P.roll * 0.30) - camRoll) * (camInit ? clamp(5 * dt, 0, 1) : 1);
+  var tx = T.x - Math.sin(camYaw) * back, tz = T.z - Math.cos(camYaw) * back;
+  var ty = T.y + up + (P.flying ? 0 : 0.4);
+  if (!P.flying) ty = Math.max(ty, groundH(tx, tz) + (P.onFoot ? 2.0 : 2.6));
   if (!camInit) { camX = tx; camY = ty; camZ = tz; camInit = true; }
   else {
     var kk = clamp((P.flying ? 6 : 9) * dt, 0, 1);
@@ -2725,7 +3036,7 @@ function updateCamera(dt) {
     camY += (Math.random() - 0.5) * shakeAmt * 0.5;
     camZ += (Math.random() - 0.5) * shakeAmt * 0.5;
   }
-  FOCAL = (HH / Math.tan(FOV / 2)) / (1 + Math.abs(P.spd) * 0.0032);
+  FOCAL = (HH / Math.tan(FOV / 2)) / (1 + (P.onFoot ? 0 : Math.abs(P.spd)) * 0.0032);
 }
 function render() {
   setSky(dayT);
@@ -2742,6 +3053,7 @@ function render() {
   drawShots();
   drawFx();
   drawAires();
+  if (P.onFoot) drawWalker();
   drawWaypoints();
   flush();
   overlay();
