@@ -517,7 +517,7 @@ var C_ROAD  = [206,150,86],  C_ROAD2 = [178,124,70],
     C_GRASS = [140,168,64],  C_GRASS2= [78,120,46],
     C_DRY   = [216,186,92],  C_DRY2  = [188,158,74],
     C_ROCK  = [184,166,158], C_ROCK2 = [146,126,120],
-    C_VINE  = [92,126,52],   C_SOIL  = [176,112,66],
+    C_VINE  = [96,128,56],   C_SOIL  = [178,138,86],
     C_SAND  = [214,186,132];
 function groundColor(x, z, h, slope, cell) {
   var c = cell || 8;
@@ -525,24 +525,36 @@ function groundColor(x, z, h, slope, cell) {
 
   /* 1. the natural hillside: green in the folds, straw on the sunny tops, rock on the cliffs */
   var alt = clamp((h - 34) / 150, 0, 1);
-  var dryness = clamp((n - 0.30) * 1.55 + alt * 0.45 + 0.12, 0, 1);
+  /* broad sweeps of meadow and dry grass — smooth, because n turns over across
+     hundreds of metres rather than cell to cell */
+  var dryness = clamp((n - 0.40) * 1.7 + alt * 0.45 + 0.22, 0, 1);
   var base = mixc(mixc(C_GRASS2, C_GRASS, clamp(n * 1.4, 0, 1)), mixc(C_DRY2, C_DRY, n), dryness);
   if (slope > 0.52) base = mixc(base, mixc(C_ROCK, C_ROCK2, n), clamp((slope - 0.52) / 0.55, 0, 1));
+  /* and a fine mottle on top, so close ground has texture rather than one flat
+     wash — small enough in amplitude that it never bands */
+  var mAmp = 0.16 * clamp(14 / c, 0, 1);          /* fades out once cells are wide,
+                                                     so it can never turn into speckle */
+  if (mAmp > 0.005) {
+    var mott = fbm(x * 0.13 + 3, z * 0.13 - 8, 2) * 0.6 + fbm(x * 0.045, z * 0.045, 2) * 0.4;
+    base = shade(base, 1 - mAmp / 2 + mott * mAmp);
+  }
 
   /* 2. the terraced vineyards — broad soft rows, faded in at the edges of the estate */
   var vd = dist2(x, z, loc('cortina').x, loc('cortina').z);
   var sd = dist2(x, z, loc('santa').x, loc('santa').z);
   var vw = 0, rowsrc = 0;
-  if (vd < 215) { vw = clamp(Math.min((215 - vd) / 45, (vd - 38) / 30), 0, 1); rowsrc = x * 0.72 + z * 0.69; }
-  if (sd < 195) {
-    var sw = clamp(Math.min((195 - sd) / 45, (sd - 52) / 30), 0, 1);
+  if (vd < 150) { vw = clamp(Math.min((150 - vd) / 40, (vd - 34) / 28), 0, 1); rowsrc = x * 0.72 + z * 0.69; }
+  if (sd < 132) {
+    var sw = clamp(Math.min((132 - sd) / 38, (sd - 48) / 26), 0, 1);
     if (sw > vw) { vw = sw; rowsrc = x * 0.66 - z * 0.75; }
   }
   if (vw > 0) {
+    /* terraces, not a chequerboard: a gentle swell between vine and earth,
+       flattened out once the cells are wider than the rows themselves */
     var vine = mixc(C_VINE, C_GRASS2, n), soil = mixc(C_SOIL, C_DRY, n * 0.7);
-    var row = c > 20 ? 0.45                                   /* far away: one even tone */
-            : smooth(clamp(Math.sin(rowsrc / 36 * TAU) * 0.62 + 0.5, 0, 1));
-    base = mixc(base, mixc(soil, vine, row), vw);
+    var amp = c > 20 ? 0 : 0.34 * clamp(1 - c / 20, 0, 1);
+    var row = smooth(clamp(Math.sin(rowsrc / 42 * TAU) * amp + 0.5, 0, 1));
+    base = mixc(base, mixc(soil, vine, row), vw * 0.85);
   }
   /* 3. a levelled, gravelled yard around every landmark */
   var y = yardInfo(x, z);
@@ -563,25 +575,11 @@ function groundColor(x, z, h, slope, cell) {
    ═══════════════════════════════════════════════════════════════════════════ */
 var cv = document.getElementById('c'), ctx = cv.getContext('2d', { alpha: false });
 var W = 800, H = 450, HW = 400, HH = 225, DPR = 1, FOCAL = 500, FOV = 1.12;
-/* a small tiling noise tile, overlaid to break up the flat fills */
-var grainPat = null;
-function buildGrain() {
-  var GRAIN = 64;
-  var g = document.createElement('canvas');
-  g.width = g.height = GRAIN;
-  var gc = g.getContext('2d'), img = gc.createImageData(GRAIN, GRAIN), rnd = rngFrom(1234);
-  for (var i = 0; i < GRAIN * GRAIN; i++) {
-    var v = 96 + (rnd() * 72 | 0);
-    img.data[i*4] = v; img.data[i*4+1] = v; img.data[i*4+2] = v; img.data[i*4+3] = 255;
-  }
-  gc.putImageData(img, 0, 0);
-  grainPat = ctx.createPattern(g, 'repeat');
-}
 var qUser = 0, qAdapt = 1;      /* qUser: 0 auto, 1 crisp, 2 fast */
 /* Pixel mode: render the world into a small buffer and let the browser blow it
    up with nearest-neighbour. No anti-aliasing, hard pixel edges — and a tenth
    of the fill cost, which pays for a lot more geometry. */
-var pixelMode = true, PIXEL_H = 250, UPS = 1;
+var pixelMode = true, PIXEL_H = 198, UPS = 1;
 var ov = document.getElementById('ov'), octx = ov.getContext('2d');
 var OW = 800, OH = 450;
 function resize() {
@@ -607,7 +605,6 @@ function resize() {
   ctx.imageSmoothingEnabled = false;
   HW = W / 2; HH = H / 2; FOCAL = HH / Math.tan(FOV / 2);
   UPS = OW / W;
-  buildGrain();
 }
 window.addEventListener('resize', resize); resize();
 
@@ -763,13 +760,24 @@ function normLight(c) {
   return [c[0] * 100 / l, c[1] * 100 / l, c[2] * 100 / l];
 }
 /* hemispheric shading: cool skylight from above, warm sun from its own angle */
-function lit(col, nx, ny, nz) {
+/* contact shading: geometry is darker where it meets the ground */
+var AO_BASE = 0, AO_H = 0;
+function setAO(baseY, height) { AO_BASE = baseY; AO_H = height; }
+function clearAO() { AO_H = 0; }
+function lit(col, nx, ny, nz, cy) {
   var L = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
   var d = (nx*sky.lx + ny*sky.ly + nz*sky.lz) / L;
-  var sun = clamp(d, 0, 1) * sky.str;
-  var amb = sky.amb * (0.90 + 0.14 * clamp(ny / L, 0, 1));
-  var k = amb + sun, zn = sky.zenN, sn = sky.sunN;
-  /* k carries the brightness, the light colours only tint it */
+  /* a tighter terminator than plain lambert: most of a lit face reads fully
+     lit, and the turn into shadow happens over a narrow band */
+  var t = clamp(d / 0.72, 0, 1);
+  var sun = t * t * (3 - 2 * t) * sky.str * 0.97;
+  var up = clamp(ny / L, 0, 1);
+  var amb = sky.amb * 0.97 * (0.84 + 0.20 * up);
+  if (AO_H > 0 && cy !== undefined) {
+    var ao = clamp((cy - AO_BASE) / AO_H, 0, 1);
+    amb *= 0.60 + 0.40 * (ao * ao * (3 - 2 * ao));
+  }
+  var zn = sky.zenN, sn = sky.sunN;
   return [ clamp(col[0] * (amb * zn[0] + sun * sn[0]) * 0.01, 0, 255),
            clamp(col[1] * (amb * zn[1] + sun * sn[1]) * 0.01, 0, 255),
            clamp(col[2] * (amb * zn[2] + sun * sn[2]) * 0.01, 0, 255) ];
@@ -824,7 +832,7 @@ function drawRidges() {
 }
 
 /* ── terrain: nested LOD rings of flat-shaded quads ──────────────────────── */
-var LOD = [ [6,8], [12,6], [24,6], [48,6], [96,6], [192,6], [384,4] ];
+var LOD = [ [4,10], [8,8], [16,7], [32,6], [64,6], [128,6], [256,6], [512,4] ];
 var COS_CULL = -0.30;
 function drawTerrain() {
   var covX0 = 0, covX1 = 0, covZ0 = 0, covZ1 = 0, have = false;
@@ -970,7 +978,7 @@ function emitFaceC(v, col, dd, ox, oy, oz) {
   if ((cx - camX) * nx + (cy - camY) * ny + (cz - camZ) * nz > 0) return;   /* backface */
   /* per-face depth, so mesh faces interleave correctly with the box details
      (eyes, feet, trim) that are sorted the same way */
-  emitPoly(v, lit(col, nx, ny, nz), { seam: true });
+  emitPoly(v, lit(col, nx, ny, nz, cy), { seam: true });
 }
 /* a cone: the building block of every conifer in the valley */
 function meshCone(x, y, z, r, h, segs, col, dd, twist) {
@@ -1186,10 +1194,11 @@ function propDist(p) { var dx = p.x - camX, dz = p.z - camZ; return Math.sqrt(dx
 function drawPine(p) {
   var d = propDist(p);
   if (d > 300) return drawPineFar(p);
-  var lod = d < 130, segs = lod ? 8 : 6, tiers = lod ? 5 : 4;
+  var lod = d < 130, segs = lod ? 11 : 7, tiers = lod ? 6 : 4;
   var h = p.h, trunkH = h * 0.20, tw = h * 0.030;
   shadowAt(p.x, p.y, p.z, h * 0.24, 0.30);
-  meshPrism(p.x, p.y, p.z, tw, trunkH * 1.15, 6, C_BARK, null, d, p.seed * 0.7, 0.8);
+  setAO(p.y, h * 0.55);
+  meshPrism(p.x, p.y, p.z, tw, trunkH * 1.15, 8, C_BARK, null, d, p.seed * 0.7, 0.8);
   var greens = [[96,142,60],[72,118,50],[52,98,44]];
   for (var t = 0; t < tiers; t++) {
     var f = t / tiers;
@@ -1197,24 +1206,28 @@ function drawPine(p) {
     var r = h * (0.34 - f * 0.20), th = (h - trunkH) * (0.44 - f * 0.10);
     meshCone(p.x, base, p.z, r, th, segs, greens[t % 3], d - t * 0.01, p.seed + t * 0.9);
   }
+  clearAO();
 }
 function drawCypress(p) {
   var d = propDist(p);
   if (d > 300) return drawCypressFar(p);
-  var lod = d < 130, segs = lod ? 8 : 6;
+  var lod = d < 130, segs = lod ? 11 : 7;
   var h = p.h, r = h * 0.13;
   shadowAt(p.x, p.y, p.z, r * 1.6, 0.32);
-  meshPrism(p.x, p.y, p.z, r * 0.35, h * 0.16, 6, C_BARK, null, d, p.seed, 0.9);
+  setAO(p.y, h * 0.6);
+  meshPrism(p.x, p.y, p.z, r * 0.35, h * 0.16, 7, C_BARK, null, d, p.seed, 0.9);
   /* a fat lower cone with a slim spire on top reads as a cypress */
   meshPrism(p.x, p.y + h * 0.10, p.z, r, h * 0.44, segs, [48,92,50], null, d, p.seed * 0.3, 0.86);
   meshCone(p.x, p.y + h * 0.54, p.z, r * 0.86, h * 0.50, segs, [40,80,44], d, p.seed * 0.3);
+  clearAO();
 }
 function drawBroad(p) {
   var d = propDist(p);
   if (d > 300) return drawBroadFar(p);
   var h = p.h, lod = d < 130;
   shadowAt(p.x, p.y, p.z, h * 0.34, 0.30);
-  meshPrism(p.x, p.y, p.z, h * 0.055, h * 0.46, 6, C_BARK, null, d, p.seed, 0.8);
+  setAO(p.y, h * 0.8);
+  meshPrism(p.x, p.y, p.z, h * 0.055, h * 0.46, 8, C_BARK, null, d, p.seed, 0.8);
   var cy = p.y + h * 0.66, rr = h * 0.34;
   meshBlob(p.x, cy, p.z, rr, rr * 0.86, rr, p.seed * 13 + 1, [88,132,56], d, 0.8);
   if (lod) {
@@ -1223,6 +1236,7 @@ function drawBroad(p) {
     meshBlob(p.x + rr * 0.54, cy - rr * 0.10, p.z - rr * 0.30, rr * 0.56, rr * 0.52, rr * 0.56,
              p.seed * 3 + 9, [66,110,48], d + 0.02, 0.9);
   }
+  clearAO();
 }
 function drawBush(p) {
   var d = propDist(p);
@@ -2529,7 +2543,9 @@ function drawCritter(c) {
   var B = basis(yawUsed, 0, 0);
   B.yaw0 = c.yaw; B.yawUsed = yawUsed;
   shadowAt(c.x, c.y, c.z, 0.34 * sc, 0.30);
+  setAO(c.y, sc * 0.55);
   drawVillager(B, [c.x, c.y + idle, c.z], sc, sp.p, walk, d < 65 ? 2 : (d < 175 ? 1 : 0), d);
+  clearAO();
   if (c.name && (c.quest ? d < 40 : c === nearestNamed) && d < 46) {   /* who is that? */
     var yTop = c.y + 1.28 * sc;
     if (project(c.x, yTop, c.z) && labelVisible(_px, _py)) {
@@ -3388,16 +3404,10 @@ function overlay() {
   ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
 
   if (pixelMode) {
-    /* paper grain, so the flat fills read as painted rather than plastic */
-    if (grainPat) {
-      ctx.globalCompositeOperation = 'overlay';
-      ctx.globalAlpha = 0.30;
-      ctx.fillStyle = grainPat; ctx.fillRect(0, 0, W, H);
-      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
-    }
-    /* colour grade: lift the warm end, deepen the shadows a touch */
+    /* a warm grade only — texture belongs in the geometry and the palette,
+       not in a layer of noise sprayed over the top */
     ctx.globalCompositeOperation = 'overlay';
-    ctx.fillStyle = 'rgba(255,214,150,0.10)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(255,216,152,0.09)'; ctx.fillRect(0, 0, W, H);
     ctx.globalCompositeOperation = 'source-over';
   }
   drawLabels();
