@@ -1668,7 +1668,7 @@ function setupTouch() {
 /* ═══════════════════════════════════════════════════════════════════════════
    10. PHYSICS — roads and air
    ═══════════════════════════════════════════════════════════════════════════ */
-var shakeAmt = 0, dustTimer = 0, gunTimer = 0, lastSpaceState = false, engineHum = 0;
+var shakeAmt = 0, reverseHold = 0, reversing = false, dustTimer = 0, gunTimer = 0, lastSpaceState = false, engineHum = 0;
 function inputs() {
   var i = { thr: 0, brk: 0, steer: 0, pitch: 0, fire: false, act: false };
   if (K['KeyW'] || K['ArrowUp'] && !P.flying) i.thr = 1;
@@ -1721,15 +1721,35 @@ function updatePlayer(dt) {
     var ri = roadInfo(P.x, P.z);
     var onRoad = ri.d < 11;
     var a = accelRate() * thr;
-    var brake = I.brk * (P.spd > 0 ? 16 : 8);
-    var drag = 0.022 * P.spd * P.spd / Math.max(1, TOPSPD[UP.engine]) + (onRoad ? 0.7 : 3.4) + (dead ? 3 : 0);
+    var dir = P.spd > 0.001 ? 1 : (P.spd < -0.001 ? -1 : 0);
+    /* rolling resistance always opposes the direction of travel */
+    var drag = 0.022 * P.spd * P.spd / Math.max(1, TOPSPD[UP.engine]) + (onRoad ? 0.7 : 3.4) + (dead ? 0.9 : 0);
     /* gravity along the slope we are pointing down */
     var ahead = 3.2;
     var hA = groundH(P.x + Math.sin(P.yaw) * ahead, P.z + Math.cos(P.yaw) * ahead);
     var grade = (hA - gy) / ahead;
-    P.spd += (a - drag - grade * 12) * dt;
-    if (I.brk) P.spd -= brake * dt * (P.spd > 0 ? 1 : 0.35);
-    if (I.brk && P.spd < 0.5) P.spd = Math.max(P.spd - 6 * dt, -7);
+    P.spd += (a - drag * dir - grade * 12) * dt;
+
+    if (I.brk) {
+      if (reversing) {
+        /* powered reverse — the brake is off, or the two would cancel out */
+        P.spd = Math.max(P.spd - 6 * dt, -7);
+        if (dead || P.spd > 0.2) reversing = false;      /* gravity won: brake again */
+      } else {
+        /* brakes bite whichever way you are rolling, and never drag you through
+           zero into the other direction — a held brake holds you on a slope */
+        var bite = (Math.abs(P.spd) > 0.5 ? 16 : 26) * dt;
+        if (Math.abs(P.spd) <= bite) { P.spd = 0; dir = 0; }
+        else P.spd -= bite * dir;
+        /* reverse is engine work: only with fuel, and only once you have stopped
+           and kept the brake held, so braking to a halt never lurches backwards */
+        if (!dead && Math.abs(P.spd) < 0.05) {
+          reverseHold += dt;
+          if (reverseHold > 0.35) reversing = true;
+        }
+      }
+    } else { reverseHold = 0; reversing = false; }
+
     P.spd = clamp(P.spd, -7, topSpeed() * (onRoad ? 1 : 0.72));
     if (Math.abs(P.spd) < 0.05 && !thr && !I.brk) P.spd *= 0.9;
 
