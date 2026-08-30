@@ -1898,18 +1898,35 @@ function nearestLoc() {
   return best && bd < best.r * 1.6 ? best : null;
 }
 function money$(n) { return n + ' ₡'; }
+/* Being broke and dry should never be the end of the run: the tow costs what
+   you have, down to nothing, and is offered anywhere it might be needed. */
+function towFee() { return Math.min(70, Math.max(0, Math.round(money))); }
+function towHome() {
+  var fee = towFee();
+  money -= fee;
+  var h = loc('home');
+  P.x = h.px; P.z = h.pz; P.y = groundH(P.x, P.z);
+  P.spd = 0; P.flying = false; P.wing = 0; P.vy = 0; P.pitch = 0; P.roll = 0;
+  P.fuel = Math.max(P.fuel, 12);
+  closeSheet();
+  toast(fee > 0 ? 'Towed home for ' + money$(fee) + '. Aires sulks.'
+                : 'Towed home on the promise of a favour. Aires sulks louder.');
+}
+function towOption() {
+  var fee = towFee();
+  return { t: 'Radio for a tow to the depot', right: fee > 0 ? money$(-fee) : 'on credit', costly: true,
+    d: fee < 70 ? 'A neighbour with a mule and a grudge. She will take the ' +
+                  (fee > 0 ? money$(fee) + ' you have' : 'favour you owe her') + ' and grumble about the rest.'
+                : 'A neighbour with a mule and a grudge will drag you home.',
+    fn: towHome };
+}
 function interact() {
   if (titleUp || gameOver) return;
   var L = nearestLoc();
   if (!L) {
     if (P.fuel <= 0.5 && Math.abs(P.spd) < 1) {
-      showSheet('Stranded', 'Aires is out of fuel and out of jokes.', [
-        { t: 'Radio for a tow to the depot', right: money$(-70), costly: true, dis: money < 70,
-          d: 'A neighbour with a mule and a grudge will drag you home.',
-          fn: function () { money -= 70; var h = loc('home'); P.x = h.px; P.z = h.pz; P.y = groundH(P.x, P.z);
-                            P.spd = 0; P.fuel = 12; closeSheet(); toast('Towed home. Aires sulks.'); } },
-        { t: 'Stay put', fn: closeSheet }
-      ]);
+      showSheet('Stranded', 'Aires is out of fuel and out of jokes.',
+                [ towOption(), { t: 'Stay put', fn: closeSheet } ]);
     } else toast('Nothing to do out here.');
     return;
   }
@@ -1949,6 +1966,22 @@ function openLocation(L) {
       dis: need <= 0 || money < cost,
       d: need > 0 ? Math.round(P.fuel) + '/' + fuelMax() + ' litres in the tank.' : 'The tank is brimming.',
       fn: function () { money -= cost; P.fuel = fuelMax(); closeSheet(); toast('Tank full.'); } });
+    var part = Math.floor(money / 0.9);
+    if (need > 0 && money < cost && part >= 3) {
+      var partCost = Math.ceil(part * 0.9);
+      opts.push({ t: 'Put in what you can afford', right: money$(-partCost), costly: true,
+        d: part + ' litres — enough to get somewhere, not everywhere.',
+        fn: function () { money -= partCost; P.fuel = Math.min(fuelMax(), P.fuel + part);
+                          closeSheet(); toast(part + ' litres in. Go carefully.'); } });
+    }
+    if (P.fuel <= 0.5 && part < 10) {
+      opts.push({ t: 'Cadge a splash off the attendant', right: 'free',
+        d: 'Ten litres and a lecture about running a business.',
+        fn: function () { P.fuel = Math.min(fuelMax(), P.fuel + 10); closeSheet();
+                          toast('Ten litres, grudgingly given.'); } });
+    }
+  } else if (P.fuel <= 0.5) {
+    opts.push(towOption());     /* dry somewhere with no pump — never a dead end */
   }
   if (hasCafe) {
     var cc = 14;
