@@ -300,7 +300,11 @@ function emitPoly(v3,col,opt){
   if(minx<-16||maxx>W+16||miny<-16||maxy>H+16) pts=clipRect(pts);
   if(pts.length<6) return;
   var depth=(opt&&opt.depth)||zsum/k;
-  dlPush(depth,{ p:pts, c:css(fogc(col,zsum/k)), a:opt&&opt.alpha, s:!opt||opt.seam!==false });
+  /* `opt` may legitimately be null; `opt && opt.alpha` would then hand flush() a
+     null, and ctx.globalAlpha = null is 0 — every prism, cone and blob in the
+     game was being painted fully transparent. */
+  dlPush(depth,{ p:pts, c:css(fogc(col,zsum/k)), a:(opt&&opt.alpha!==undefined)?opt.alpha:undefined,
+                 s:!opt||opt.seam!==false });
 }
 /* Sutherland–Hodgman against the screen rectangle */
 function clipRect(p){
@@ -476,14 +480,14 @@ function shadowEllipse(x,z,rx,rz,yaw,alpha){
   var d=dist2(x,z,camX,camZ); if(d>70) return;
   var a=(alpha===undefined?1:alpha)*clamp((70-d)/16,0,1);
   if(a<0.02) return;
-  var cs=Math.cos(yaw), sn=Math.sin(yaw), segs=10;
+  var cs=Math.cos(yaw), sn=Math.sin(yaw), segs=14;
   for(var k=0;k<2;k++){
     var q=k?0.56:1.0, v=[];
     for(var i=0;i<segs;i++){
       var t=i/segs*TAU, ox=Math.cos(t)*rx*q, oz=Math.sin(t)*rz*q;
       v.push(x+ox*cs+oz*sn, 0.028+k*0.002, z-ox*sn+oz*cs);
     }
-    emitPoly(v, [40,36,44], { alpha:a*0.26, seam:false, depth:d-0.4-k*0.02 });
+    emitPoly(v, [72,50,34], { alpha:a*0.24, seam:false, depth:d-0.4-k*0.02 });
   }
 }
 function shadowRect(x,z,w,d2,yaw,alpha){
@@ -493,7 +497,7 @@ function shadowRect(x,z,w,d2,yaw,alpha){
   var p=[ptOf(B,o,-w,0,-d2), ptOf(B,o,w,0,-d2), ptOf(B,o,w,0,d2), ptOf(B,o,-w,0,d2)];
   emitPoly([p[0][0],p[0][1],p[0][2], p[1][0],p[1][1],p[1][2],
             p[2][0],p[2][1],p[2][2], p[3][0],p[3][1],p[3][2]],
-           [40,36,44], { alpha:a, seam:false, depth:d-0.35 });
+           [72,50,34], { alpha:a, seam:false, depth:d-0.35 });
 }
 /* the sun comes from (LX,LY,LZ), so a shadow is offset by -L.xz * height/L.y */
 var SHOFF = 0.42;
@@ -512,7 +516,7 @@ function drawShadows(){
   }
   /* the delivery truck, when it is in */
   if(typeof truck!=='undefined' && truck && truck.here)
-    shadowEllipse(truck.x+0.4, truck.z+0.4, 1.7, 3.4, truck.yaw||0, 0.9);
+    shadowEllipse(truck.x+0.5, truck.z+0.5, 3.2, 1.35, 0, 0.9);
   /* cacti and rocks close enough to matter */
   for(i=0;i<CACTI.length;i++){
     var q=CACTI[i];
@@ -659,8 +663,8 @@ function drawGround(){
                             mixc(C_SAND,C_SAND2,0.5+s()*0.5), 0.5, 0.008);
   }
   /* highway */
-  groundQuad(0, -30, 60, 5.0, PI/2, C_ROAD, 1, 0.014);
-  for(var d=-52;d<52;d+=6) groundQuad(d, -30, 1.5, 0.16, PI/2, [236,224,150], 1, 0.02);
+  groundQuad(0, -30, 60, 5.0, 0, C_ROAD, 1, 0.014);
+  for(var d=-52;d<52;d+=6) groundQuad(d, -30, 1.5, 0.16, 0, [236,224,150], 1, 0.02);
   /* forecourt slab + apron */
   groundQuad((LOT.x0+LOT.x1)/2, (LOT.z0+LOT.z1)/2, (LOT.x1-LOT.x0)/2, (LOT.z1-LOT.z0)/2, 0, C_LOT, 1, 0.016);
   groundQuad(0, -20, 9, 5, 0, C_LOT, 1, 0.015);
@@ -1321,18 +1325,76 @@ function updateTruck(dt){
 function drawTruck(){
   if(!truck.here) return;
   var B=basis(-PI/2,0,0), o=[truck.x,0,truck.z];
-  setAO(0,2.4);
-  for(var wx=-1;wx<=1;wx+=2) for(var wz=-1;wz<=1;wz+=2)
-    meshPrismB(B,o, wx*1.0, 0.42, wz*1.8, 0.42, 0.18, 9,'x', [40,42,48], [92,96,104]);
-  drawBox(B,o, 0, 1.55, 0.7, 1.05, 0.95, 2.2, [232,110,72]);       /* box body */
-  drawBox(B,o, 0, 1.0, -1.9, 0.98, 0.7, 0.9, [214,90,60]);          /* cab */
-  drawBox(B,o, 0, 1.32, -2.78, 0.80, 0.34, 0.06, C_GLASS);
-  drawBox(B,o, -1.07, 1.5, 0.7, 0.03, 0.72, 1.7, [246,238,214]);    /* side panel */
+  var ORANGE=[236,116,66], ORANGE_D=[206,86,48], CREAM=[248,240,220], TRIM=[62,72,86];
+  setAO(0,2.6);
+
+  /* ── wheels: fat tyres with a pale hubcap and a mudguard over each ── */
+  for(var wx=-1;wx<=1;wx+=2) for(var wz=-1;wz<=1;wz+=2){
+    var ax=wx*1.16, az=wz*1.70;
+    meshPrismB(B,o, ax, 0.62, az, 0.62, 0.24, 11,'x', [38,40,46], [30,32,38]);
+    meshPrismB(B,o, ax+wx*0.09, 0.62, az, 0.32, 0.18, 10,'x', [196,202,210], [218,224,232]);
+    meshPrismB(B,o, ax+wx*0.11, 0.62, az, 0.12, 0.16, 6,'x', [128,134,144], [152,158,168]);
+    drawBox(B,o, ax*0.96, 1.24, az, 0.07, 0.11, 0.76, ORANGE_D);   /* mudguard */
+  }
+
+  /* ── box body: a big slab with a cream cargo panel and a painted stripe ── */
+  drawBox(B,o, 0, 1.78, 0.75, 1.06, 0.92, 2.15, ORANGE);
+  drawBox(B,o, 0, 2.72, 0.75, 1.02, 0.06, 2.10, ORANGE_D);          /* roof cap  */
+  for(var sd=-1; sd<=1; sd+=2)
+    drawBox(B,o, sd*1.07, 1.86, 0.80, 0.03, 0.52, 1.62, CREAM);     /* side panel */
+  for(var sd2=-1; sd2<=1; sd2+=2)
+    drawBox(B,o, sd2*1.08, 1.14, 0.80, 0.03, 0.09, 2.05, ORANGE_D); /* skirt stripe */
+  /* rear roller door, ribbed */
+  drawBox(B,o, 0, 1.80, 2.92, 0.86, 0.74, 0.03, [230,224,208]);
+  for(var rb=0; rb<4; rb++)
+    drawBox(B,o, 0, 1.24+rb*0.36, 2.95, 0.84, 0.040, 0.02, [200,194,180]);
+  drawBox(B,o, 0, 1.02, 2.98, 0.30, 0.05, 0.02, [110,114,124]);     /* handle */
+
+  /* ── cab: nose, bonnet, glass, grille, lights ── */
+  drawBox(B,o, 0, 1.28, -1.62, 1.00, 0.62, 1.05, ORANGE);           /* cab box   */
+  drawBox(B,o, 0, 0.86, -2.72, 0.98, 0.34, 0.42, ORANGE);           /* bonnet    */
+  drawBox(B,o, 0, 1.66, -1.90, 0.94, 0.06, 0.72, ORANGE_D);         /* cab roof  */
+  drawBox(B,o, 0, 1.42, -2.30, 0.86, 0.30, 0.06, C_GLASS);          /* windscreen*/
+  drawBox(B,o, 0, 1.42, -2.30, 0.03, 0.30, 0.07, TRIM);             /* divider   */
+  for(var g=-1; g<=1; g+=2)
+    drawBox(B,o, g*0.94, 1.34, -1.72, 0.05, 0.24, 0.34, C_GLASS);   /* door glass*/
+  drawBox(B,o, 0, 0.74, -3.12, 0.78, 0.20, 0.05, TRIM);             /* grille    */
+  for(var gs=0; gs<3; gs++)
+    drawBox(B,o, 0, 0.66+gs*0.10, -3.15, 0.74, 0.022, 0.02, [150,156,168]);
+  for(var hl=-1; hl<=1; hl+=2){
+    meshPrismB(B,o, hl*0.68, 0.98, -3.10, 0.13, 0.05, 8,'z', [252,246,208], [255,252,232]);
+    drawBox(B,o, hl*0.92, 0.44, -3.06, 0.10, 0.07, 0.05, [214,84,66]); /* indicator */
+  }
+  drawBox(B,o, 0, 0.42, -3.10, 0.92, 0.10, 0.08, [176,182,192]);    /* bumper    */
+  for(var mr=-1; mr<=1; mr+=2){                                     /* mirrors   */
+    drawBox(B,o, mr*1.16, 1.52, -2.18, 0.10, 0.03, 0.03, TRIM);
+    drawBox(B,o, mr*1.26, 1.44, -2.18, 0.03, 0.13, 0.09, TRIM);
+  }
+  /* exhaust stack behind the cab */
+  meshPrismB(B,o, 0.98, 1.90, -1.10, 0.07, 0.62, 7,'y', [148,152,160], [96,100,110]);
   clearAO();
-  sprite(truck.x-1.6, 2.1, truck.z, function(sx,sy,sc){
-    if(sc<18) return;
-    ctx.font='bold '+(sc*0.13|0)+'px "Baloo 2",sans-serif'; ctx.textAlign='center';
-    ctx.fillStyle='#e0523f'; ctx.fillText('TOOL DELIVERY', sx, sy); ctx.textAlign='left';
+
+  /* ── open tailgate crates, so it reads as a delivery in progress ── */
+  if(truck.stay>0){
+    setAO(0,0.9);
+    var cw=[[3.55,0.30,0.34],[3.95,0.26,-0.30],[3.62,0.24,-0.86]];
+    for(var q=0;q<cw.length;q++){
+      var Bc=basis(-PI/2+ (q-1)*0.4,0,0);
+      drawBox(Bc,o, cw[q][2], cw[q][1], cw[q][0], 0.30, cw[q][1], 0.30, [206,158,102]);
+      drawBox(Bc,o, cw[q][2], cw[q][1]*2-0.03, cw[q][0], 0.31, 0.03, 0.31, [184,136,84]);
+    }
+    clearAO();
+  }
+
+  sprite(truck.x, 2.90, truck.z, function(sx,sy,sc){
+    if(sc<16) return;
+    ctx.save();
+    ctx.font='bold '+(sc*0.11|0)+'px "Baloo 2",sans-serif';
+    ctx.textAlign='center'; ctx.lineJoin='round';
+    ctx.lineWidth=sc*0.030; ctx.strokeStyle='rgba(255,255,255,0.92)';
+    ctx.strokeText('TOOL DELIVERY', sx, sy);
+    ctx.fillStyle='#d94f36'; ctx.fillText('TOOL DELIVERY', sx, sy);
+    ctx.restore(); ctx.textAlign='left';
   },-1);
 }
 function openTruck(){
