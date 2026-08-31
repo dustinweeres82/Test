@@ -1689,14 +1689,8 @@ function actionFor(h){
   }
   if(h.kind==='oilCan') return heldOil ? null : { t:'Grab a quart of oil' };
   if(h.kind==='ground') return { t:'Hold to dig', hold:true };
-  if(h.kind==='customModel'){
-    var va=voxelDestructAction(h); if(va) return va;
-    return { t:'Adjust it' };
-  }
-  if(h.kind==='slotStation' || h.kind==='slotCar'){
-    var vaSlot=voxelDestructAction(h); if(vaSlot) return vaSlot;
-    return { t:'Adjust it' };
-  }
+  if(h.kind==='customModel') return voxelDestructAction(h);
+  if(h.kind==='slotStation' || h.kind==='slotCar') return voxelDestructAction(h);
   if(h.kind==='candyShelf') return { t:'Rearrange every shelf', bad:true };
   if(h.kind==='hotdogRoller') return { t:'Sneeze in the roller', bad:true };
   if(h.kind==='slushee') return { t:'Crank it past the red line', bad:true };
@@ -1801,14 +1795,12 @@ function pressUse(){
   if(h.kind==='ledger'){ openBasementUpgrades(); return; }
   if(h.kind==='buyer'){ if(voxelDestructPress(h)) return; sellToBuyer(); return; }
   if(h.kind==='oilCan'){ pickUpOil(); return; }
-  if(h.kind==='customModel'){
-    if(voxelDestructPress(h)) return;
-    openModelAdjust(h.model); return;
-  }
-  if(h.kind==='slotStation' || h.kind==='slotCar'){
-    if(voxelDestructPress(h)) return;
-    openSlotAdjust(h.slotKey, slotLabel(h.slotKey)); return;
-  }
+  /* editing is deliberately not reachable by aiming at something and
+     pressing E any more — only voxelDestructPress()'s crowbar/gun/lighter/
+     fire actions still work here. Adjusting (repaint, scale, remove, ...)
+     only opens from the P menu now. */
+  if(h.kind==='customModel'){ voxelDestructPress(h); return; }
+  if(h.kind==='slotStation' || h.kind==='slotCar'){ voxelDestructPress(h); return; }
   var c=h.car;
   if(h.kind==='cap' && !heldNozzle){ c.capOpen=!c.capOpen; return; }
   if(h.kind==='hat'){ removeHat(c); return; }
@@ -3427,6 +3419,40 @@ function openSlotAdjust(key, label){
   ]);
   showSheet('Adjust: '+label, modelAdjustSub(m), opts);
 }
+/* the only door into the custom-object system now — press P. Nothing about
+   a placed object is reachable by walking up and aiming at it any more
+   (destruction with a tool in hand is the one exception, since that's
+   gameplay rather than editing); this is a deliberate, plain, no-on-screen-
+   hint menu instead of a discoverable "E to adjust" prompt. */
+function openObjectManager(){
+  var opts=[
+    { t:'Import a new model...', d:'.obj, .glb, or .vox — press E on it to place once you pick one.',
+      fn:function(){ closeSheet(); if(locked) document.exitPointerLock(); document.getElementById('modelFile').click(); } }
+  ];
+  if(CUSTOM_MODELS.length){
+    opts.push({ rule:true });
+    for(var i=0;i<CUSTOM_MODELS.length;i++){
+      (function(m,i){
+        opts.push({ t:'Loose object #'+(i+1),
+          d:(m.isVoxImport?'Multicoloured':m.rig?'Rigged':m.voxelized?'Voxelized':'Smooth')+' &middot; '+m.tris.length+' triangles',
+          fn:function(){ closeSheet(); openModelAdjust(m); } });
+      })(CUSTOM_MODELS[i], i);
+    }
+  }
+  var wired=[];
+  for(var s=0;s<SLOT_DEFS.length;s++) if(CUSTOM_SLOTS[SLOT_DEFS[s].key]) wired.push(SLOT_DEFS[s]);
+  if(wired.length){
+    opts.push({ rule:true });
+    for(var w=0;w<wired.length;w++){
+      (function(def){
+        opts.push({ t:'Wired: '+def.label, fn:function(){ closeSheet(); openSlotAdjust(def.key, def.label); } });
+      })(wired[w]);
+    }
+  }
+  opts.push({ rule:true });
+  opts.push({ t:'Never mind', fn:closeSheet });
+  showSheet('Manage custom objects', (CUSTOM_MODELS.length+wired.length)+' placed', opts);
+}
 function chooseModelDestination(payload){
   var tris=payload.tris, rig=payload.rig, vox=payload.vox;
   var opts=[
@@ -4653,7 +4679,7 @@ window.addEventListener('keydown', function(e){
   if(e.code==='KeyQ'){ holster=!holster; if(holster&&pumping) stopPump(); syncBelt(); }
   if(e.code==='KeyG') bgDropBat();
   if(e.code==='KeyY') showReviewLog();
-  if(e.code==='KeyM'){ if(locked) document.exitPointerLock(); document.getElementById('modelFile').click(); }
+  if(e.code==='KeyP'){ openObjectManager(); }
   if(e.code==='KeyV'){ if(Object.keys(AUTO_VOX).length) unvoxelizeEverything(); else voxelizeEverything(); }
   for(var i=0;i<TOOLS.length;i++){
     var tk=TOOLS[i].key;
