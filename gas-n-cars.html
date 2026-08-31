@@ -242,6 +242,14 @@ function hex(c){ var f=function(v){ v=clamp(v|0,0,255).toString(16); return v.le
 var cv = document.getElementById('c'), ctx = cv.getContext('2d', { alpha:false });
 var ov = document.getElementById('ov'), octx = ov.getContext('2d');
 var W=800,H=450,HW=400,HH=225,OW=800,OH=450,UPS=1,FOCAL=500,FOV=1.28,DPR=1;
+/* how many pixels the software rasteriser is allowed to shade per frame; this
+   is a fill-rate-bound renderer, so cost is close to linear in this number */
+var PIXBUDGET = 310000;
+/* Canvas antialiases every fill independently, leaving a hairline gap between
+   adjacent faces. Stroking each polygon in its own colour closes it — and costs
+   about half the frame. Past a few metres the gap is sub-pixel, so only faces
+   near the camera pay for it. */
+var SEAM_D = 0;   /* off by default — see the seam-stroke measurement in the commit */
 function resize(){
   DPR = Math.min(window.devicePixelRatio||1, 2);
   var vw = window.innerWidth, vh = window.innerHeight;
@@ -249,7 +257,7 @@ function resize(){
   ov.width = OW = Math.round(vw*od); ov.height = OH = Math.round(vh*od);
   ov.style.width = vw+'px'; ov.style.height = vh+'px';
   /* a modest supersample budget — this is a smooth cartoon look, not pixel art */
-  var q = Math.min(1, Math.sqrt(310000/Math.max(1,vw*vh)));
+  var q = Math.min(1, Math.sqrt(PIXBUDGET/Math.max(1,vw*vh)));
   W = Math.round(vw*q); H = Math.round(vh*q);
   cv.width=W; cv.height=H; cv.style.width=vw+'px'; cv.style.height=vh+'px';
   HW=W/2; HH=H/2; FOCAL = HH/Math.tan(FOV/2); UPS = OW/W;
@@ -360,7 +368,7 @@ function flush(){
     ctx.closePath();
     if(it.a!==undefined) ctx.globalAlpha=it.a;
     ctx.fillStyle=it.c; ctx.fill();
-    if(it.s){ ctx.strokeStyle=it.c; ctx.lineWidth=1.1; ctx.lineJoin='round'; ctx.stroke(); }
+    if(it.s && it.d<SEAM_D){ ctx.strokeStyle=it.c; ctx.lineWidth=1.1; ctx.lineJoin='round'; ctx.stroke(); }
     if(it.a!==undefined) ctx.globalAlpha=1;
   }
   DLn=0;
