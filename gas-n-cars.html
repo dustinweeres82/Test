@@ -1496,12 +1496,12 @@ function allHotspots(){
     out.push({ kind:'ledger', x:BASE.x+BASE_HX-0.8, y:1.2, z:BASE.z+1.2, r:0.6 });
     return out;
   }
-  out.push({ kind:'candyShelf', x:INT.x-2.2, y:1.0, z:INT.z-1.7, r:0.9 });
-  out.push({ kind:'hotdogRoller', x:INT.x-0.2, y:1.0, z:INT.z-1.9, r:0.6 });
-  out.push({ kind:'slushee', x:INT.x+1.6, y:1.0, z:INT.z-1.9, r:0.6 });
-  out.push({ kind:'intercom', x:INT.x+2.3, y:1.5, z:INT.z-0.6, r:0.45 });
-  out.push({ kind:'jingleBox', x:INT.x+2.3, y:0.9, z:INT.z+0.8, r:0.45 });
-  out.push({ kind:'basementDoor', x:INT.x+2.2, y:1.2, z:INT.z+1.8, r:0.6 });
+  out.push({ kind:'candyShelf', x:INT.x+ROOM_HX-0.8, y:1.0, z:INT.z-ROOM_HZ+0.9, r:0.9 });
+  out.push({ kind:'hotdogRoller', x:INT.x+ROOM_HX-2.0, y:1.0, z:INT.z-ROOM_HZ+0.7, r:0.6 });
+  out.push({ kind:'slushee', x:INT.x+ROOM_HX-3.2, y:1.0, z:INT.z-ROOM_HZ+0.7, r:0.6 });
+  out.push({ kind:'intercom', x:INT.x+ROOM_HX-0.5, y:1.5, z:INT.z-1.5, r:0.45 });
+  out.push({ kind:'jingleBox', x:INT.x+ROOM_HX-0.5, y:0.9, z:INT.z+1.0, r:0.45 });
+  out.push({ kind:'basementDoor', x:INT.x+ROOM_HX-1.9, y:1.2, z:INT.z+ROOM_HZ-0.6, r:0.6 });
   out.push({ kind:'register', x:REGISTER.x, y:1.1, z:REGISTER.z, r:0.7 });
   if(buyerHere) out.push({ kind:'buyer', x:BUYER_SPOT.x, y:1.3, z:BUYER_SPOT.z, r:0.6 });
   for(i=0;i<CARS.length;i++) if(CARS[i].state==='waiting') carHotspots(CARS[i], out);
@@ -1959,43 +1959,49 @@ function drawGull(){
   meshBlobB(B,o, 0.10,0.02,0.02, 0.09,0.03,0.14,(GULL.seed*1000+7)|0,[178,182,190],0.7,0.10); /* wing */
   meshBlobB(B,o,-0.10,0.02,0.02, 0.09,0.03,0.14,(GULL.seed*1000+9)|0,[178,182,190],0.7,0.10); /* wing */
 }
-/* ── the store: a real room built right onto the lot, not a separate scene.
-   No teleport — the south wall just has a gap in it, and the room is always
-   drawn and always collides, same as any other piece of the world. ───────── */
-var INT={ x:SHOP.x+SHOP.w/2+1.2+3.0, z:SHOP.z }, ROOM_HX=3.0, ROOM_HZ=2.4, ROOM_H=2.6, DOOR_HALF=0.9;
+/* ── the store: the ACTUAL shop building's own footprint, walkable, entered
+   through the west bay opening that used to hold a glass door. The other
+   three exterior walls the station already renders — that shell reads as
+   solid from outside (front faces win the cull test) and as empty from
+   inside (the same faces then face away from the camera and lose it), so
+   there's nothing to hide: just stop drawing glass in one bay and put a
+   room in the volume the building already occupies. ─────────────────────── */
+var INT={ x:SHOP.x, z:SHOP.z }, ROOM_HX=SHOP.w/2, ROOM_HZ=SHOP.d/2, ROOM_H=2.9;
+var DOOR_CZ=-0.7, DOOR_HALF=0.95;                 /* matches the old bay-2 opening exactly */
+var DOOR_OUT={ x:SHOP.x-SHOP.w/2-0.6, z:DOOR_CZ };  /* staging point out in the forecourt */
 var jingleOn=false, jingleT=6;
-var REGISTER={ x:INT.x-2.2, y:1.1, z:INT.z+ROOM_HZ-0.6 };
+var REGISTER={ x:INT.x-ROOM_HX+1.5, y:1.1, z:DOOR_CZ };
 var REG_LINE=[];
-function regSlot(i){ return { x:REGISTER.x-i*0.55, z:REGISTER.z }; }
+function regSlot(i){ return { x:REGISTER.x, z:REGISTER.z+i*0.55 }; }
 function wallQuad(x0,z0,x1,z1,y0,y1,col){
   var p=[x0,y0,z0, x1,y0,z1, x1,y1,z1, x0,y1,z0];
   emitPoly(p, lit(col,(z1-z0),0.15,-(x1-x0),y0), null);
 }
 function drawCandyShelf(){
-  var B=basis(0,0,0), o=[INT.x-2.2,0,INT.z-1.7];
+  var B=basis(0,0,0), o=[INT.x+ROOM_HX-0.8,0,INT.z-ROOM_HZ+0.9];
   drawBox(B,o, 0,0.9,0, 0.35,0.9,0.9, [196,150,90], null);
   drawBox(B,o, 0,0.55,0.05, 0.32,0.03,0.85, [230,90,90], null);
   drawBox(B,o, 0,0.95,0.05, 0.32,0.03,0.85, [90,170,230], null);
   drawBox(B,o, 0,1.35,0.05, 0.32,0.03,0.85, [240,210,80], null);
 }
 function drawHotdogRoller(){
-  var B=basis(0,0,0), o=[INT.x-0.2,0,INT.z-1.9];
+  var B=basis(0,0,0), o=[INT.x+ROOM_HX-2.0,0,INT.z-ROOM_HZ+0.7];
   drawBox(B,o, 0,0.75,0, 0.4,0.35,0.22, [214,60,50], null);
   drawBox(B,o, 0,1.05,0, 0.42,0.06,0.24, [230,230,225], null);
   for(var i=-1;i<=1;i++) drawBox(B,o, i*0.14,0.95,0, 0.06,0.06,0.20, [222,170,120], null);
 }
 function drawSlushee(){
-  var B=basis(0,0,0), o=[INT.x+1.6,0,INT.z-1.9];
+  var B=basis(0,0,0), o=[INT.x+ROOM_HX-3.2,0,INT.z-ROOM_HZ+0.7];
   drawBox(B,o, 0,0.65,0, 0.28,0.60,0.28, [230,230,232], null);
   drawBox(B,o, -0.10,1.25,0, 0.10,0.28,0.10, [70,170,230], null);
   drawBox(B,o, 0.10,1.25,0, 0.10,0.28,0.10, [230,60,120], null);
 }
 function drawIntercom(){
-  var B=basis(0,0,0), o=[INT.x+2.3,0,INT.z-0.6];
+  var B=basis(0,0,0), o=[INT.x+ROOM_HX-0.5,0,INT.z-1.5];
   drawBox(B,o, 0,1.5,0, 0.03,0.14,0.10, [60,60,64], null);
 }
 function drawJingleBox(){
-  var B=basis(0,0,0), o=[INT.x+2.3,0,INT.z+0.8];
+  var B=basis(0,0,0), o=[INT.x+ROOM_HX-0.5,0,INT.z+1.0];
   var col = jingleOn ? [230,190,60] : [140,140,140];
   drawBox(B,o, 0,0.7,0, 0.16,0.10,0.10, col, null);
 }
@@ -2006,17 +2012,24 @@ function drawRegister(){
   drawBox(B,o, 0,1.06,0, 0.08,0.06,0.08, [230,230,225], null);
 }
 function drawStoreInterior(){
+  /* the shop's own exterior shell reads as solid from outside (its faces are
+     culled relative to the camera) and as empty from inside (those same
+     faces then point away from the camera) — so from in here it would look
+     hollow with nothing lining it. These walls are the real interior
+     surface; inset a little off the true footprint so they don't sit
+     exactly on top of the piers/shell and z-fight with them. */
   setAO(0,0);
-  var x0=INT.x-ROOM_HX, x1=INT.x+ROOM_HX, z0=INT.z-ROOM_HZ, z1=INT.z+ROOM_HZ, hgt=ROOM_H;
+  var pad=0.12;
+  var x0=INT.x-ROOM_HX+pad, x1=INT.x+ROOM_HX-pad, z0=INT.z-ROOM_HZ+pad, z1=INT.z+ROOM_HZ-pad, hgt=ROOM_H;
   var wallCol=[232,222,198];
-  groundQuad(INT.x, INT.z, ROOM_HX, ROOM_HZ, 0, [214,196,160], 1, 0.0);
-  groundQuad(INT.x, INT.z, ROOM_HX, ROOM_HZ, 0, [248,244,234], 1, hgt);
-  wallQuad(x0,z0, x1,z0, 0,hgt, wallCol);
-  wallQuad(x0,z0, x0,z1, 0,hgt, wallCol);
-  wallQuad(x1,z1, x1,z0, 0,hgt, wallCol);
-  wallQuad(x1,z1, INT.x+DOOR_HALF,z1, 0,hgt, wallCol);
-  wallQuad(INT.x-DOOR_HALF,z1, x0,z1, 0,hgt, wallCol);
-  wallQuad(INT.x-DOOR_HALF,z1, INT.x+DOOR_HALF,z1, hgt*0.72,hgt, wallCol);
+  groundQuad(INT.x, INT.z, ROOM_HX-pad, ROOM_HZ-pad, 0, [214,196,160], 1, 0.02);
+  groundQuad(INT.x, INT.z, ROOM_HX-pad, ROOM_HZ-pad, 0, [248,244,234], 1, hgt);
+  wallQuad(x0,z0, x1,z0, 0,hgt, wallCol);                                   /* north */
+  wallQuad(x1,z0, x1,z1, 0,hgt, wallCol);                                   /* east  */
+  wallQuad(x1,z1, x0,z1, 0,hgt, wallCol);                                   /* south */
+  wallQuad(x0,z0, x0,DOOR_CZ-DOOR_HALF, 0,hgt, wallCol);                    /* west, above the door */
+  wallQuad(x0,DOOR_CZ+DOOR_HALF, x0,z1, 0,hgt, wallCol);                    /* west, below the door */
+  wallQuad(x0,DOOR_CZ-DOOR_HALF, x0,DOOR_CZ+DOOR_HALF, hgt*0.72,hgt, wallCol); /* lintel over the door */
   drawCandyShelf();
   drawHotdogRoller();
   drawSlushee();
@@ -2026,7 +2039,7 @@ function drawStoreInterior(){
 }
 function slusheeBoom(){
   addChaos(4);
-  for(var i=0;i<18;i++) FX.push({ x:INT.x+1.6+rnd(-0.3,0.3), y:1.3+rnd(0,0.4), z:INT.z-1.9+rnd(-0.3,0.3),
+  for(var i=0;i<18;i++) FX.push({ x:INT.x+ROOM_HX-3.2+rnd(-0.3,0.3), y:1.3+rnd(0,0.4), z:INT.z-ROOM_HZ+0.7+rnd(-0.3,0.3),
       vy:rnd(0.6,1.6), t:0, life:0.5, r:0.04, col: Math.random()<0.5?[70,170,230]:[230,60,120] });
   toast('The slushee machine loses containment. Gloriously.');
 }
@@ -2361,7 +2374,8 @@ function checkDone(c){
   syncOrder();
   if(all && !c.served){
     c.served=true;
-    c.custState='walkingIn'; c.walkX=c.x; c.walkZ=c.z; c.walkYaw=c.yaw;
+    c.custState='walkingIn'; c.walkPhase='toDoor';
+    c.walkX=c.x; c.walkZ=c.z; c.walkYaw=c.yaw;
     REG_LINE.push(c);
     toast('Order complete — heading in to pay');
   }
@@ -2374,12 +2388,20 @@ function tapRegister(){
 function startWalkOut(c){
   var idx=REG_LINE.indexOf(c);
   if(idx>=0) REG_LINE.splice(idx,1);
-  c.custState='walkingOut';
+  c.custState='walkingOut'; c.walkPhase='toDoor';
 }
+/* everyone funnels through DOOR_OUT/the doorway rather than cutting a
+   straight line through the shop's walls to get to the register */
 function updateCustomerWalk(dt){
-  var i, c, dx, dz, d, sp;
+  var i, c, tx, tz, dx, dz, d, sp;
   for(i=0;i<REG_LINE.length;i++){
     c=REG_LINE[i];
+    if(c.walkPhase==='toDoor'){
+      dx=DOOR_OUT.x-c.walkX; dz=DOOR_OUT.z-c.walkZ; d=Math.sqrt(dx*dx+dz*dz);
+      if(d<0.12){ c.walkPhase='toSlot'; } else { sp=Math.min(1,1.5*dt/d); c.walkX+=dx*sp; c.walkZ+=dz*sp; c.walkYaw=Math.atan2(dx,dz); }
+      c.custState='walkingIn';
+      continue;
+    }
     var slot=regSlot(i);
     dx=slot.x-c.walkX; dz=slot.z-c.walkZ; d=Math.sqrt(dx*dx+dz*dz);
     if(d>0.04){
@@ -2391,6 +2413,11 @@ function updateCustomerWalk(dt){
   for(i=CARS.length-1;i>=0;i--){
     c=CARS[i];
     if(c.custState!=='walkingOut') continue;
+    if(c.walkPhase==='toDoor'){
+      dx=DOOR_OUT.x-c.walkX; dz=DOOR_OUT.z-c.walkZ; d=Math.sqrt(dx*dx+dz*dz);
+      if(d<0.12){ c.walkPhase='toCar'; } else { sp=Math.min(1,1.5*dt/d); c.walkX+=dx*sp; c.walkZ+=dz*sp; c.walkYaw=Math.atan2(dx,dz); }
+      continue;
+    }
     dx=c.x-c.walkX; dz=c.z-c.walkZ; d=Math.sqrt(dx*dx+dz*dz);
     if(d<0.15){ c.custState=null; finishCar(c,false); continue; }
     sp=Math.min(1, 1.5*dt/d);
@@ -3297,14 +3324,16 @@ function walk(dt){
   camY = 1.68 + Math.sin(bobT)*0.022;
 }
 /* a real room's walls, as a thin solid band around its perimeter — except the
-   doorway, which simply has no band there, so walking through it just works */
-function wallBlocked(x,z,x0,x1,z0,z1,doorHalf,doorCX){
+   doorway (on the west side), which simply has no band there, so walking
+   through it just works. The store's room IS the shop's own footprint now,
+   so this replaces the old blanket "whole building is solid" check. */
+function wallBlocked(x,z,x0,x1,z0,z1,doorZC,doorHalf){
   var WT=0.3;
   if(z>=z0-WT && z<=z0+WT && x>=x0-WT && x<=x1+WT) return true;         /* north */
-  if(x>=x0-WT && x<=x0+WT && z>=z0-WT && z<=z1+WT) return true;         /* west  */
   if(x>=x1-WT && x<=x1+WT && z>=z0-WT && z<=z1+WT) return true;         /* east  */
-  if(z>=z1-WT && z<=z1+WT && x>=x0-WT && x<=x1+WT){                     /* south, minus the door */
-    if(x<doorCX-doorHalf || x>doorCX+doorHalf) return true;
+  if(z>=z1-WT && z<=z1+WT && x>=x0-WT && x<=x1+WT) return true;         /* south */
+  if(x>=x0-WT && x<=x0+WT && z>=z0-WT && z<=z1+WT){                     /* west, minus the door */
+    if(z<doorZC-doorHalf || z>doorZC+doorHalf) return true;
   }
   return false;
 }
@@ -3315,8 +3344,7 @@ function blocked(x,z){
   if(x<-26||x>26||z<-34||z>26) return true;
   var i;
   for(i=0;i<PUMPS.length;i++) if(Math.abs(x-PUMPS[i].x)<1.0 && Math.abs(z-PUMPS[i].z)<1.5) return true;
-  if(Math.abs(x-SHOP.x)<SHOP.w/2+0.4 && Math.abs(z-SHOP.z)<SHOP.d/2+0.4) return true;
-  if(wallBlocked(x,z, INT.x-ROOM_HX,INT.x+ROOM_HX, INT.z-ROOM_HZ,INT.z+ROOM_HZ, DOOR_HALF, INT.x)) return true;
+  if(wallBlocked(x,z, INT.x-ROOM_HX,INT.x+ROOM_HX, INT.z-ROOM_HZ,INT.z+ROOM_HZ, DOOR_CZ, DOOR_HALF)) return true;
   for(i=0;i<CARS.length;i++){
     var c=CARS[i]; if(c.state==='leaving') continue;
     var dx=x-c.x, dz=z-c.z;
@@ -3650,9 +3678,9 @@ function stnBuilding(B0){
   /* painted plinth grounding the walls */
   stnQX(xF-0.004, zN, zS, 0.0, 0.28, [206,190,160], 1);
   stnQZ(zN-0.006, xF, xB, 0.0, 0.28, [206,190,160], -1, 1);
-  /* ── the two glazed bay doors ── */
+  /* ── bay 1 keeps its glazed door; bay 2 is the real, walk-through entrance
+     now, so no glass gets drawn there — the opening is real, not painted on ── */
   stnBayDoor(B0, (oz1[0]+oz1[1])/2, (oz1[1]-oz1[0])/2, 0.08, 2.52);
-  stnBayDoor(B0, (oz2[0]+oz2[1])/2, (oz2[1]-oz2[0])/2, 0.08, 2.52);
   /* ── the sign board over the bays ── */
   var sz=-1.85, sw=2.30;
   stnBoxD(B0,[3.64,0,sz], 0, 3.32, 0, 0.06, 0.54, sw, stnFRAME);
