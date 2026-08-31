@@ -2217,15 +2217,33 @@ function remeshTerrainChunk(key){
   var built=voxelsToTrisTerrain(cells, TERRAIN_CELL);
   chunk.topTris=built.top; chunk.sideTris=built.side;
 }
+/* drawModelTris routes every triangle through emitFaceC, which needs a
+   point roughly INSIDE the solid to tell which way each face should end
+   up pointing — fine for an ordinary prop, whose triangles live in small
+   local coordinates around its own (x,y,z), but terrain triangles are
+   already in absolute world space and can be anywhere across the whole
+   ~52x60 map, so passing a single fixed reference near the world origin
+   made that inside/outside test wrong (and the face silently dropped as
+   backfacing) for any chunk far from (0,0) — exactly the missing-terrain
+   holes this was causing. Each chunk is only 4 world units across, so its
+   own centroid is always a valid "inside" reference for its own faces. */
+function drawTerrainTris(tris, col, yNudge, rx, ry, rz){
+  for(var i=0;i<tris.length;i++){
+    var t=tris[i];
+    emitFaceC([t[0],t[1]+yNudge,t[2], t[3],t[4]+yNudge,t[5], t[6],t[7]+yNudge,t[8]], col, rx, ry, rz);
+  }
+}
 function drawTerrainChunks(){
   for(var key in TERRAIN_CHUNKS){
     var c=TERRAIN_CHUNKS[key];
     if(c.dirty) remeshTerrainChunk(key);
+    var p=key.split(','), wcell=TERRAIN_CHUNK*TERRAIN_CELL;
+    var rx=(+p[0]+0.5)*wcell, rz=(+p[1]+0.5)*wcell;
     /* a small +y nudge on the top faces only: an untouched border column
        inside an otherwise-dug/built chunk sits at exactly y=0, coincident
        with the flat ground plane underneath it, which z-fights without this */
-    if(c.topTris.length) drawModelTris(c.topTris, TERRAIN_TOP_COL, 0,0.003,0, 0, 1, 0);
-    if(c.sideTris.length) drawModelTris(c.sideTris, TERRAIN_SIDE_COL, 0,0,0, 0, 1, 0);
+    if(c.topTris.length) drawTerrainTris(c.topTris, TERRAIN_TOP_COL, 0.003, rx, TERRAIN_FLOOR, rz);
+    if(c.sideTris.length) drawTerrainTris(c.sideTris, TERRAIN_SIDE_COL, 0, rx, TERRAIN_FLOOR, rz);
   }
 }
 function spawnDirtFX(x,z,col){
