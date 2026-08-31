@@ -1583,7 +1583,7 @@ function actionFor(h){
     return { t:'Take the payment' };
   }
   if(h.kind==='oilCan') return heldOil ? null : { t:'Grab a quart of oil' };
-  if(h.kind==='customModel') return { t:'Repaint it' };
+  if(h.kind==='customModel') return { t:'Adjust it' };
   if(h.kind==='candyShelf') return { t:'Rearrange every shelf', bad:true };
   if(h.kind==='hotdogRoller') return { t:'Sneeze in the roller', bad:true };
   if(h.kind==='slushee') return { t:'Crank it past the red line', bad:true };
@@ -1684,7 +1684,7 @@ function pressUse(){
   if(h.kind==='ledger'){ openBasementUpgrades(); return; }
   if(h.kind==='buyer'){ sellToBuyer(); return; }
   if(h.kind==='oilCan'){ pickUpOil(); return; }
-  if(h.kind==='customModel'){ repaintModel(h.model); return; }
+  if(h.kind==='customModel'){ openModelAdjust(h.model); return; }
   var c=h.car;
   if(h.kind==='cap' && !heldNozzle){ c.capOpen=!c.capOpen; return; }
   if(h.kind==='hat'){ removeHat(c); return; }
@@ -2369,7 +2369,7 @@ var SLOT_DEFS=[
 ];
 function drawSlot(key, x, z, yaw, scale, y, refY){
   var m=CUSTOM_SLOTS[key]; if(!m) return false;
-  drawModelTris(m.tris, m.col, x, y||0, z, yaw||0, scale, refY);
+  drawModelTris(m.tris, m.col, x, y||0, z, (yaw||0)+(m.rot||0), scale*(m.scale||1), refY);
   return true;
 }
 /* one flat colour per model — there is no texture pipeline here, so
@@ -2391,19 +2391,49 @@ function pickModelColor(sub, onPick){
   opts.push({ t:'Cancel', fn:closeSheet });
   showSheet('Pick a colour', sub, opts);
 }
-function repaintModel(m){
-  pickModelColor('Flat-shaded only — one solid colour for the whole model.',
-    function(col){ m.col=col; closeSheet(); toast('Repainted.'); });
+/* a loose dropped model: adjust its own scale/rotation/colour, or pull it */
+function openModelAdjust(m){
+  var opts=[
+    { t:'Repaint', fn:function(){
+        pickModelColor('Flat-shaded only — one solid colour for the whole model.',
+          function(col){ m.col=col; closeSheet(); openModelAdjust(m); }); } },
+    { t:'Rotate 45°', fn:function(){ m.yaw+=PI/4; openModelAdjust(m); } },
+    { t:'Scale up', right:'&times;1.15', fn:function(){ m.scale=Math.min(8,m.scale*1.15); openModelAdjust(m); } },
+    { t:'Scale down', right:'&times;0.87', fn:function(){ m.scale=Math.max(0.1,m.scale/1.15); openModelAdjust(m); } },
+    { rule:true },
+    { t:'Remove it', fn:function(){
+        var idx=CUSTOM_MODELS.indexOf(m); if(idx>=0) CUSTOM_MODELS.splice(idx,1);
+        closeSheet(); toast('Removed.'); } },
+    { t:'Done', fn:closeSheet }
+  ];
+  showSheet('Adjust model', 'Scale &times;'+m.scale.toFixed(2)+' &middot; '+m.tris.length+' triangles', opts);
+}
+/* a wired slot: same adjustments, but they apply everywhere that slot is
+   drawn (every car, every driver, ...) since it is one shared template */
+function openSlotAdjust(key, label){
+  var m=CUSTOM_SLOTS[key];
+  var opts=[
+    { t:'Repaint', fn:function(){
+        pickModelColor('Flat-shaded only — one solid colour for the whole model.',
+          function(col){ m.col=col; closeSheet(); openSlotAdjust(key,label); }); } },
+    { t:'Rotate 45°', fn:function(){ m.rot=(m.rot||0)+PI/4; openSlotAdjust(key,label); } },
+    { t:'Scale up', right:'&times;1.15', fn:function(){ m.scale=Math.min(4,(m.scale||1)*1.15); openSlotAdjust(key,label); } },
+    { t:'Scale down', right:'&times;0.87', fn:function(){ m.scale=Math.max(0.1,(m.scale||1)/1.15); openSlotAdjust(key,label); } },
+    { rule:true },
+    { t:'Revert to the original look', fn:function(){ delete CUSTOM_SLOTS[key]; closeSheet(); toast(label+' back to normal.'); } },
+    { t:'Done', fn:closeSheet }
+  ];
+  showSheet('Adjust: '+label, 'Scale &times;'+(m.scale||1).toFixed(2)+' &middot; '+m.tris.length+' triangles', opts);
 }
 function chooseModelDestination(tris){
   var opts=[
-    { t:'Just drop it in the world', d:'Loose prop, right where you are standing. Repaint it any time by walking up and pressing E.',
+    { t:'Just drop it in the world', d:'Loose prop, right where you are standing. Adjust it any time by walking up and pressing E.',
       fn:function(){
         pickModelColor('Flat-shaded only — one solid colour for the whole model.', function(col){
           closeSheet();
           var dropX=camX+Math.sin(camYaw)*2.4, dropZ=camZ+Math.cos(camYaw)*2.4;
           importModelAt(tris, dropX, dropZ, camYaw+PI, col);
-          toast('Model dropped in — '+tris.length+' triangles');
+          openModelAdjust(CUSTOM_MODELS[CUSTOM_MODELS.length-1]);
         });
       } }
   ];
@@ -2413,8 +2443,8 @@ function chooseModelDestination(tris){
         fn:function(){
           pickModelColor('Flat-shaded only — one solid colour for the whole model.', function(col){
             closeSheet();
-            CUSTOM_SLOTS[def.key]={ tris:tris, col:col };
-            toast(def.label+' now uses your model — '+tris.length+' triangles');
+            CUSTOM_SLOTS[def.key]={ tris:tris, col:col, scale:1, rot:0 };
+            openSlotAdjust(def.key, def.label);
           });
         } });
     })(SLOT_DEFS[i]);
