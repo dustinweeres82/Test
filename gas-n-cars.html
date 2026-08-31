@@ -1485,6 +1485,14 @@ function carHotspots(c, out){
 }
 function allHotspots(){
   var out=[], i;
+  if(inBasement){
+    out.push({ kind:'exitBasement', x:BASE.x, y:1.3, z:BASE.z+BASE_HZ-0.2, r:0.7 });
+    for(i=0;i<STATIONS.length;i++)
+      out.push({ kind:'station', st:i, x:stationX(i), y:1.0, z:BASE.z-1.6, r:0.7 });
+    out.push({ kind:'manager', x:BASE.x-BASE_HX+0.8, y:1.4, z:BASE.z+1.2, r:0.6 });
+    out.push({ kind:'ledger', x:BASE.x+BASE_HX-0.8, y:1.2, z:BASE.z+1.2, r:0.6 });
+    return out;
+  }
   if(inStore){
     out.push({ kind:'exitStore', x:INT.x, y:1.3, z:INT.z+ROOM_HZ-0.2, r:0.7 });
     out.push({ kind:'candyShelf', x:INT.x-2.6, y:1.0, z:INT.z-1.2, r:0.9 });
@@ -1492,9 +1500,11 @@ function allHotspots(){
     out.push({ kind:'slushee', x:INT.x+1.0, y:1.0, z:INT.z-2.0, r:0.6 });
     out.push({ kind:'intercom', x:INT.x+3.0, y:1.5, z:INT.z-1.0, r:0.45 });
     out.push({ kind:'jingleBox', x:INT.x+3.0, y:0.9, z:INT.z+0.8, r:0.45 });
+    out.push({ kind:'basementDoor', x:INT.x-3.0, y:1.2, z:INT.z+1.4, r:0.6 });
     return out;
   }
   out.push({ kind:'storeDoor', x:SHOP.x, y:1.3, z:SHOP.z+SHOP.d/2+0.1, r:0.7 });
+  if(buyerHere) out.push({ kind:'buyer', x:BUYER_SPOT.x, y:1.3, z:BUYER_SPOT.z, r:0.6 });
   for(i=0;i<CARS.length;i++) if(CARS[i].state==='waiting') carHotspots(CARS[i], out);
   for(i=0;i<PUMPS.length;i++){
     var P=PUMPS[i];
@@ -1549,6 +1559,16 @@ function actionFor(h){
   if(h.kind==='slushee') return { t:'Crank it past the red line', bad:true };
   if(h.kind==='intercom') return { t:'Read a license plate back to them', bad:true };
   if(h.kind==='jingleBox') return { t: jingleOn ? 'Turn the jingle off' : 'Turn the jingle on', bad:!jingleOn };
+  if(h.kind==='basementDoor') return { t: basementUnlocked ? 'Head downstairs' : 'A locked door...' };
+  if(h.kind==='exitBasement') return { t:'Head back upstairs' };
+  if(h.kind==='station'){
+    var bst=STATIONS[h.st];
+    if(bst.worker!=null) return { t:'Pull '+WORKERS[bst.worker].name+' off the line' };
+    return { t: WORKERS.length ? 'Put someone on the '+bst.name.toLowerCase() : 'Nobody to put here — check the ledger' };
+  }
+  if(h.kind==='manager') return { t:'Hand out a sample' };
+  if(h.kind==='ledger') return { t:'Open the books' };
+  if(h.kind==='buyer') return { t:'Sell the ready cases', bad:true };
   var c=h.car; if(!c) return null;
   if(h.kind==='cap'){
     if(heldNozzle) return { t: c.capOpen ? 'Hold to pump fuel' : 'Open the cap first', hold:c.capOpen };
@@ -1626,6 +1646,12 @@ function pressUse(){
   if(h.kind==='slushee'){ slusheeBoom(); return; }
   if(h.kind==='intercom'){ intercomAnnounce(); return; }
   if(h.kind==='jingleBox'){ jingleOn=!jingleOn; jingleT=6; toast(jingleOn?'The jingle starts up again.':'Blessed silence.'); return; }
+  if(h.kind==='basementDoor'){ tapBasementDoor(); return; }
+  if(h.kind==='exitBasement'){ exitBasement(); return; }
+  if(h.kind==='station'){ tapStation(h.st); return; }
+  if(h.kind==='manager'){ managerSample(); return; }
+  if(h.kind==='ledger'){ openBasementUpgrades(); return; }
+  if(h.kind==='buyer'){ sellToBuyer(); return; }
   var c=h.car;
   if(h.kind==='cap' && !heldNozzle){ c.capOpen=!c.capOpen; return; }
   if(h.kind==='hat'){ removeHat(c); return; }
@@ -1982,6 +2008,175 @@ function intercomAnnounce(){
   if(!waiting.length){ toast('The intercom crackles. Nobody is out there.'); return; }
   var c=pick(waiting);
   toast('"'+c.plate+', we see you." Silence follows.');
+}
+/* ── the basement: an unlicensed energy-drink operation, tycoon-style ────────
+   Paid crew, not press-ganged — they can be pulled off the line any time, and
+   the "manager" hands out free samples instead of leaning on anyone. */
+var BASE={x:130,z:120}, BASE_HX=4.4, BASE_HZ=2.6, BASE_H=2.4;
+var basementUnlocked=false, inBasement=false, basePrevX=0, basePrevZ=0, basePrevYaw=0;
+var STATIONS=[
+  { key:'cook', name:'Cook Line', rate:0.16, worker:null, prog:0, bank:0 },
+  { key:'dry', name:'Dry Rack', rate:0.20, worker:null, prog:0, bank:0 },
+  { key:'measure', name:'Measure Bench', rate:0.22, worker:null, prog:0, bank:0 },
+  { key:'package', name:'Packaging', rate:0.20, worker:null, prog:0, bank:0 }
+];
+var WORKERS=[];
+var upgrades={ speed:0, quality:0, marketing:0 };
+var heat=0, buyerHere=false, buyerTimer=rnd(25,40), managerCd=0;
+var BUYER_SPOT={ x:SHOP.x+SHOP.w/2+1.8, z:SHOP.z-3.2 };
+function stationX(i){ return BASE.x-3.3+i*2.2; }
+function tapBasementDoor(){
+  if(!basementUnlocked){
+    showSheet('A door in the back', 'Padlocked. Somebody has been down there before.',
+      [{ t:'Cut the lock — set up downstairs', right:'$200', d:'A little side income never hurt anyone.',
+         dis:cash<200,
+         fn:function(){ cash-=200; basementUnlocked=true; syncHUD(); closeSheet();
+                        toast('The lock gives. Stairs down into the dark.'); } },
+       { rule:true },
+       { t:'Leave it', fn:closeSheet }]);
+    return;
+  }
+  enterBasement();
+}
+function enterBasement(){
+  basePrevX=camX; basePrevZ=camZ; basePrevYaw=camYaw;
+  camX=BASE.x; camZ=BASE.z+BASE_HZ-0.6; camY=1.68; camYaw=PI; camPitch=0;
+  inBasement=true;
+  toast('Down into the dark. The hum of machinery.');
+}
+function exitBasement(){
+  camX=basePrevX; camZ=basePrevZ; camYaw=basePrevYaw; camY=1.68; camPitch=0;
+  inBasement=false;
+  toast('Back up into the store.');
+}
+function hireWorker(){
+  WORKERS.push({ id:WORKERS.length, name:pick(FIRST)+' '+pick(LAST), energy:1 });
+}
+function tapStation(i){
+  var st=STATIONS[i];
+  if(st.worker!=null){
+    toast(WORKERS[st.worker].name+' steps away from the '+st.name.toLowerCase()+'.');
+    st.worker=null;
+    return;
+  }
+  var busy={}, k;
+  for(k=0;k<STATIONS.length;k++) if(STATIONS[k].worker!=null) busy[STATIONS[k].worker]=true;
+  var idle=-1;
+  for(k=0;k<WORKERS.length;k++) if(!busy[k]){ idle=k; break; }
+  if(idle<0){ toast(WORKERS.length ? 'Everyone is already working a line.' : 'Nobody hired yet — check the ledger.'); return; }
+  st.worker=idle;
+  toast(WORKERS[idle].name+' takes the '+st.name.toLowerCase()+'.');
+}
+function managerSample(){
+  if(managerCd>0){ toast('The manager already made the rounds.'); return; }
+  managerCd=8;
+  var sleepy=-1, low=1;
+  for(var i=0;i<WORKERS.length;i++) if(WORKERS[i].energy<low){ low=WORKERS[i].energy; sleepy=i; }
+  if(sleepy<0){ toast(WORKERS.length ? 'Everyone looks fine, actually.' : 'Nobody down here to sample anything.'); return; }
+  WORKERS[sleepy].energy=1;
+  toast('The manager tosses '+WORKERS[sleepy].name+' a free can. Back to it.');
+}
+function workerCost(){ return 120+WORKERS.length*90; }
+function speedCost(){ return 150+upgrades.speed*120; }
+function qualityCost(){ return 180+upgrades.quality*140; }
+function marketingCost(){ return 100+upgrades.marketing*80; }
+function openBasementUpgrades(){
+  var pkg=STATIONS[STATIONS.length-1];
+  var opts=[
+    { t:'Hire a worker', right:'$'+workerCost(), d:'One more pair of hands for the line.',
+      dis:cash<workerCost(), fn:function(){ cash-=workerCost(); hireWorker(); syncHUD(); openBasementUpgrades(); } },
+    { t:'Faster line', right:'$'+speedCost(), d:'Every station moves a little quicker.',
+      dis:cash<speedCost(), fn:function(){ cash-=speedCost(); upgrades.speed++; syncHUD(); openBasementUpgrades(); } },
+    { t:'Better product', right:'$'+qualityCost(), d:'Sells for more per case.',
+      dis:cash<qualityCost(), fn:function(){ cash-=qualityCost(); upgrades.quality++; syncHUD(); openBasementUpgrades(); } },
+    { t:'Marketing push', right:'$'+marketingCost(), d:'Buyers show up more often.',
+      dis:cash<marketingCost(), fn:function(){ cash-=marketingCost(); upgrades.marketing++; syncHUD(); openBasementUpgrades(); } },
+    { rule:true },
+    { t:'Close the books', fn:closeSheet }
+  ];
+  showSheet('The Ledger', WORKERS.length+' on the line &middot; '+(pkg.bank||0)+' cases ready &middot; heat '+Math.round(heat)+'%', opts);
+}
+function tickBasement(dt){
+  if(!basementUnlocked) return;
+  for(var i=0;i<STATIONS.length;i++){
+    var st=STATIONS[i];
+    var w = st.worker!=null ? WORKERS[st.worker] : null;
+    if(!w || w.energy<=0) continue;
+    var fed = i===0 || STATIONS[i-1].bank>0;
+    if(!fed) continue;
+    st.prog += dt*st.rate*(1+upgrades.speed*0.25);
+    w.energy = Math.max(0, w.energy-dt*0.02);
+    if(st.prog>=1){
+      st.prog-=1;
+      if(i>0) STATIONS[i-1].bank--;
+      st.bank=(st.bank||0)+1;
+    }
+  }
+}
+function spawnBuyer(){ if(basementUnlocked && !buyerHere) buyerHere=true; }
+function sellToBuyer(){
+  var pkg=STATIONS[STATIONS.length-1], have=pkg.bank||0;
+  if(have<=0){ toast('Nothing ready to move yet.'); buyerHere=false; return; }
+  var sold=Math.min(have,6);
+  pkg.bank-=sold;
+  var price=6+upgrades.quality*3;
+  var earned=sold*price;
+  heat=Math.min(100,heat+sold*3);
+  cash+=earned; syncHUD();
+  buyerHere=false;
+  if(heat>78 && Math.random()<0.35){
+    var fine=Math.round(earned*0.6);
+    cash=Math.max(0,cash-fine); heat=Math.max(0,heat-30); syncHUD();
+    toast('A close call — you eat a $'+fine+' "inspection fee".');
+  } else {
+    toast('Sold '+sold+' cases for +$'+earned+'.');
+  }
+}
+function drawBaseStation(i){
+  var st=STATIONS[i];
+  var B=basis(0,0,0), o=[stationX(i),0,BASE.z-1.6];
+  drawBox(B,o, 0,0.55,0, 0.42,0.55,0.42, [150,150,158], null);
+  drawBox(B,o, 0,0.15,0.45, 0.30,0.02+st.prog*0.5,0.03, [90,190,110], null);
+  if(st.worker!=null){
+    var w=WORKERS[st.worker], asleep=w.energy<=0;
+    var wcol = asleep ? [140,140,150] : [230,190,120];
+    var bob = asleep ? 0 : Math.sin(gTime*2+i)*0.03;
+    drawBox(B,o, 0,1.15+bob,0.55, 0.14,0.34,0.14, wcol, null);
+    drawBox(B,o, 0,1.55+bob,0.55, 0.11,0.11,0.11, [230,200,170], null);
+  }
+  var bank=Math.min(st.bank||0,6);
+  for(var k=0;k<bank;k++) drawBox(B,o, 0.30,0.10+k*0.10,-0.30, 0.10,0.05,0.10, [200,170,90], null);
+}
+function drawManagerProp(){
+  var B=basis(0,0,0), o=[BASE.x-BASE_HX+0.8,0,BASE.z+1.2];
+  drawBox(B,o, 0,1.2,0, 0.16,0.4,0.16, [70,90,140], null);
+  drawBox(B,o, 0,1.66,0, 0.13,0.13,0.13, [230,200,170], null);
+}
+function drawLedgerProp(){
+  var B=basis(0,0,0), o=[BASE.x+BASE_HX-0.8,0,BASE.z+1.2];
+  drawBox(B,o, 0,0.55,0, 0.30,0.55,0.20, [110,80,50], null);
+}
+function drawBasementRoom(){
+  setAO(0,0);
+  var x0=BASE.x-BASE_HX, x1=BASE.x+BASE_HX, z0=BASE.z-BASE_HZ, z1=BASE.z+BASE_HZ, hgt=BASE_H;
+  var wallCol=[70,66,64], doorHalf=0.75;
+  groundQuad(BASE.x, BASE.z, BASE_HX, BASE_HZ, 0, [54,52,50], 1, 0.0);
+  groundQuad(BASE.x, BASE.z, BASE_HX, BASE_HZ, 0, [46,44,42], 1, hgt);
+  wallQuad(x0,z0, x1,z0, 0,hgt, wallCol);
+  wallQuad(x0,z0, x0,z1, 0,hgt, wallCol);
+  wallQuad(x1,z1, x1,z0, 0,hgt, wallCol);
+  wallQuad(x1,z1, BASE.x+doorHalf,z1, 0,hgt, wallCol);
+  wallQuad(BASE.x-doorHalf,z1, x0,z1, 0,hgt, wallCol);
+  wallQuad(BASE.x-doorHalf,z1, BASE.x+doorHalf,z1, hgt*0.72,hgt, wallCol);
+  for(var i=0;i<STATIONS.length;i++) drawBaseStation(i);
+  drawManagerProp();
+  drawLedgerProp();
+}
+function drawBuyer(){
+  if(!buyerHere) return;
+  var B=basis(0,0,0), o=[BUYER_SPOT.x,0,BUYER_SPOT.z];
+  drawBox(B,o, 0,0.9,0, 0.18,0.5,0.18, [90,70,110], null);
+  drawBox(B,o, 0,1.5,0, 0.14,0.14,0.14, [222,180,150], null);
 }
 function drawPoop(){
   for(var i=0;i<POOP_PILES.length;i++){
@@ -3022,6 +3217,9 @@ function walk(dt){
   camY = 1.68 + Math.sin(bobT)*0.022;
 }
 function blocked(x,z){
+  if(inBasement){
+    return x<BASE.x-BASE_HX+0.3 || x>BASE.x+BASE_HX-0.3 || z<BASE.z-BASE_HZ+0.3 || z>BASE.z+BASE_HZ-0.3;
+  }
   if(inStore){
     return x<INT.x-ROOM_HX+0.3 || x>INT.x+ROOM_HX-0.3 || z<INT.z-ROOM_HZ+0.3 || z>INT.z+ROOM_HZ-0.3;
   }
@@ -4147,7 +4345,9 @@ function render(){
   }
   setCamBasis();
   DLn=0; glOpaque.length=0; glTrans.length=0;
-  if(inStore){
+  if(inBasement){
+    drawBasementRoom();
+  } else if(inStore){
     drawStoreInterior();
   } else {
     drawSky();
@@ -4160,6 +4360,7 @@ function render(){
     drawPoop();
     drawRestroomSign();
     drawGull();
+    drawBuyer();
     for(var i=0;i<CARS.length;i++) drawCar(CARS[i]);
     drawBallGuy();
     drawBallProps();
@@ -4201,6 +4402,13 @@ function frame(now){
       jingleT-=dt;
       if(jingleT<=0){ jingleT=6; addChaos(0.5);
         toast(pick(['That jingle. Again.','It loops. It always loops.','You will hear this in your sleep.'])); }
+    }
+    tickBasement(dt);
+    if(heat>0) heat=Math.max(0,heat-dt*0.8);
+    if(managerCd>0) managerCd-=dt;
+    if(basementUnlocked && !buyerHere){
+      buyerTimer-=dt;
+      if(buyerTimer<=0){ spawnBuyer(); buyerTimer=rnd(25,40)/(1+upgrades.marketing*0.3); }
     }
     clockT+=dt;
     if(clockT>DAY_LEN) endDay();
