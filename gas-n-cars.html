@@ -16,7 +16,7 @@
           --green:#4cae5a; --red:#e0523f; --blue:#3f7fd0; --amber:#f0a020; }
   html, body { width:100%; height:100%; overflow:hidden; background:#101418; cursor:default;
                font-family:'Quicksand',system-ui,sans-serif; font-weight:600; color:var(--ink); }
-  canvas#c { display:block; position:fixed; inset:0; width:100%; height:100%; }
+  canvas#sky, canvas#c { display:block; position:fixed; inset:0; width:100%; height:100%; }
   canvas#ov { display:block; position:fixed; inset:0; width:100%; height:100%; pointer-events:none; }
 
   #hud { position:fixed; inset:0; pointer-events:none; user-select:none; display:none; }
@@ -156,6 +156,7 @@
 </style>
 </head>
 <body>
+<canvas id="sky"></canvas>
 <canvas id="c"></canvas>
 <canvas id="ov"></canvas>
 <div id="hurtFlash"></div>
@@ -244,17 +245,26 @@ function hex(c){ var f=function(v){ v=clamp(v|0,0,255).toString(16); return v.le
 /* ═══════════════════════════════════════════════════════════════════════════
    2. RENDERER — first person, painter's algorithm, flat-shaded meshes
    ═══════════════════════════════════════════════════════════════════════════ */
-var cv = document.getElementById('c'), ctx = cv.getContext('2d', { alpha:false });
+/* ── the renderer is WebGL now: #sky (2D) paints the background, #c (WebGL)
+   paints the depth-tested 3D world, #ov (2D, full-res) paints crisp text on
+   top. `ctx` keeps its old name and meaning — the background 2D context —
+   so drawSky()/drawClouds()/buildVignette() below are untouched. ── */
+var skyCv = document.getElementById('sky'), ctx = skyCv.getContext('2d', { alpha:false });
+var cv = document.getElementById('c');
+var gl = cv.getContext('webgl', { alpha:true, antialias:false, depth:true,
+                                   stencil:false, premultipliedAlpha:true,
+                                   powerPreference:'high-performance' });
+var glProjMat=new Float32Array(16);   /* resize() fills this on the very first call */
+var GL_NEAR=0.16, GL_FAR=900;   /* generous far plane — fog hides the join, not a hard clip */
 var ov = document.getElementById('ov'), octx = ov.getContext('2d');
 var W=800,H=450,HW=400,HH=225,OW=800,OH=450,UPS=1,FOCAL=500,FOV=1.28,DPR=1;
 /* how many pixels the software rasteriser is allowed to shade per frame; this
    is a fill-rate-bound renderer, so cost is close to linear in this number */
 var PIXBUDGET = 310000;
-/* Canvas antialiases every fill independently, leaving a hairline gap between
-   adjacent faces. Stroking each polygon in its own colour closes it — and costs
-   about half the frame. Past a few metres the gap is sub-pixel, so only faces
-   near the camera pay for it. */
-var SEAM_D = 0;   /* off by default — see the seam-stroke measurement in the commit */
+/* SEAM_D and the per-polygon outline stroke it gated are gone: that was a
+   canvas-2D fix for the hairline gap between independently-antialiased fills.
+   Adjacent GPU-rasterised triangles share exact edges — there is no gap to
+   close. */
 function resize(){
   DPR = Math.min(window.devicePixelRatio||1, 2);
   var vw = window.innerWidth, vh = window.innerHeight;
@@ -264,14 +274,18 @@ function resize(){
   /* a modest supersample budget — this is a smooth cartoon look, not pixel art */
   var q = Math.min(1, Math.sqrt(PIXBUDGET/Math.max(1,vw*vh)));
   W = Math.round(vw*q); H = Math.round(vh*q);
+  skyCv.width=W; skyCv.height=H; skyCv.style.width=vw+'px'; skyCv.style.height=vh+'px';
   cv.width=W; cv.height=H; cv.style.width=vw+'px'; cv.style.height=vh+'px';
   HW=W/2; HH=H/2; FOCAL = HH/Math.tan(FOV/2); UPS = OW/W;
+  gl.viewport(0,0,W,H);
+  buildProj();
   buildVignette();
 }
-/* a soft corner darkening plus a warm centre lift — the cheap half of a grade */
+/* a soft corner darkening plus a warm centre lift — the cheap half of a grade.
+   Built against the full-res overlay now, since that is where it gets painted. */
 var vignette=null;
 function buildVignette(){
-  var g=ctx.createRadialGradient(HW,HH*0.94,Math.min(W,H)*0.30,HW,HH,Math.max(W,H)*0.76);
+  var g=octx.createRadialGradient(OW/2,OH*0.94/2,Math.min(OW,OH)*0.30,OW/2,OH/2,Math.max(OW,OH)*0.76);
   g.addColorStop(0,   'rgba(255,236,196,0.05)');
   g.addColorStop(0.55,'rgba(255,236,196,0)');
   g.addColorStop(1,   'rgba(48,36,52,0.26)');
@@ -290,8 +304,12 @@ function setCamBasis(){
   rx=r0x*cr+u0x*sr; ry=r0y*cr+u0y*sr; rz=r0z*cr+u0z*sr;
   ux=-r0x*sr+u0x*cr; uy=-r0y*sr+u0y*cr; uz=-r0z*sr+u0z*cr;
 }
-var DL=[], DLn=0;
-function dlPush(d,item){ item.d=d; if(DLn<DL.length) DL[DLn]=item; else DL.push(item); DLn++; }
+/* DLn used to count entries in a depth-sorted display list; the display list
+   is gone (the GPU depth-tests now), but DLn survives as a plain per-frame
+   polygon counter — the station/car code's face-count instrumentation
+   ("n0=DLn; ...; count=DLn-n0") still reads it, and so does the eval
+   tooling from earlier in this project. */
+var DLn=0;
 var LABELS=[], LABELn=0;
 function pushLabel(fn){ if(LABELn<LABELS.length) LABELS[LABELn]=fn; else LABELS.push(fn); LABELn++; }
 
@@ -300,83 +318,130 @@ function fogc(c,d){ var t=clamp((d-FOGSTART)/(FAR-FOGSTART),0,1); return mixc(c,
 var _vx=0,_vy=0,_vz=0;
 function toView(x,y,z){ var dx=x-camX,dy=y-camY,dz=z-camZ;
   _vx=dx*rx+dy*ry+dz*rz; _vy=dx*ux+dy*uy+dz*uz; _vz=dx*fx+dy*fy+dz*fz; }
-var NEARZ=0.16, _vbuf=[];
+/* GPU accumulation buffers, rebuilt every frame. Opaque triangles go straight
+   into one flat array — with the z-buffer doing visibility, submission order
+   doesn't matter. Translucent ones (alpha<1: glass, shadows, dirt, spills, FX)
+   are kept as separate items and sorted back-to-front at flush time, same as
+   the painter's algorithm always did for them, because blending still needs
+   an order even when depth testing doesn't. */
+var glOpaque=[], glTrans=[];
+var EMIT_NUDGE=0.012;   /* see note by GL_NEAR below */
 function emitPoly(v3,col,opt){
-  var n=v3.length/3, i, vs=_vbuf; vs.length=0; var zsum=0;
-  for(i=0;i<n;i++){ toView(v3[i*3],v3[i*3+1],v3[i*3+2]); vs.push(_vx,_vy,_vz); }
-  var out=[], m=vs.length/3;
-  for(i=0;i<m;i++){
-    var ax=vs[i*3],ay=vs[i*3+1],az=vs[i*3+2], j=(i+1)%m;
-    var bx=vs[j*3],by=vs[j*3+1],bz=vs[j*3+2];
-    var ain=az>NEARZ, bin=bz>NEARZ;
-    if(ain) out.push(ax,ay,az);
-    if(ain!==bin){ var t=(NEARZ-az)/(bz-az); out.push(ax+(bx-ax)*t, ay+(by-ay)*t, NEARZ); }
+  var n=v3.length/3; if(n<3) return;
+  var i, nx=0,ny=0,nz=0, cx=0,cy=0,cz=0;
+  /* Newell's method: robust even when the leading edge is near-collinear,
+     which several callers (carFace, drvFace) rely on. */
+  for(i=0;i<n;i++){
+    var ax=v3[i*3],ay=v3[i*3+1],az=v3[i*3+2], j=(i+1)%n;
+    var bx=v3[j*3],by=v3[j*3+1],bz=v3[j*3+2];
+    nx+=(ay-by)*(az+bz); ny+=(az-bz)*(ax+bx); nz+=(ax-bx)*(ay+by);
+    cx+=ax; cy+=ay; cz+=az;
   }
-  var k=out.length/3; if(k<3) return;
-  var pts=new Array(k*2), minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9;
-  for(i=0;i<k;i++){
-    var z=out[i*3+2], iz=FOCAL/z;
-    var sx=HW+out[i*3]*iz, sy=HH-out[i*3+1]*iz;
-    pts[i*2]=sx; pts[i*2+1]=sy;
-    if(sx<minx)minx=sx; if(sx>maxx)maxx=sx; if(sy<miny)miny=sy; if(sy>maxy)maxy=sy;
-    zsum+=z;
+  cx/=n; cy/=n; cz/=n;
+  toView(cx,cy,cz);
+  if(_vz<-40) return;                 /* comfortably behind the camera */
+  var ddx=cx-camX, ddy=cy-camY, ddz=cz-camZ;
+  var dist=Math.sqrt(ddx*ddx+ddy*ddy+ddz*ddz);
+  var fcol=fogc(col,dist);
+  var r=fcol[0]/255, g=fcol[1]/255, b=fcol[2]/255;
+  var alpha=(opt&&opt.alpha!==undefined)?opt.alpha:1;
+  /* Callers that used to bias the painter's sort order (carFace's trim bias,
+     drvFace's cabin-glass bias, the station's stnDep/stnQX/stnQZ/stnBoxD
+     y-neutral depth) now just need this face nudged a hair toward the camera
+     along its own normal, to win a coincident z-fight against the surface it
+     decorates — a real z-buffer does the rest, so only the PRESENCE of a
+     bias matters now, not its old magnitude. */
+  var ex=0,ey=0,ez=0;
+  if(opt&&opt.nudge!==undefined){
+    /* particle billboards: several near-coplanar discs stacked into one
+       cluster need their OWN distinct step, not just "in front or not" */
+    var nl2=Math.sqrt(nx*nx+ny*ny+nz*nz)||1, steps=opt.nudge+1;
+    ex=nx/nl2*EMIT_NUDGE*steps; ey=ny/nl2*EMIT_NUDGE*steps; ez=nz/nl2*EMIT_NUDGE*steps;
+  } else if(opt&&opt.depth!==undefined){
+    var nl=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;
+    ex=nx/nl*EMIT_NUDGE; ey=ny/nl*EMIT_NUDGE; ez=nz/nl*EMIT_NUDGE;
   }
-  if(maxx<0||minx>W||maxy<0||miny>H) return;
-  if((maxx-minx)*(maxy-miny)<1.4) return;
-  /* A near-clipped quad can project to a path hundreds of thousands of pixels
-     across. The rasteriser walks that whole span, so clip to the viewport. */
-  if(minx<-16||maxx>W+16||miny<-16||maxy>H+16) pts=clipRect(pts);
-  if(pts.length<6) return;
-  var depth=(opt&&opt.depth)||zsum/k;
-  /* `opt` may legitimately be null; `opt && opt.alpha` would then hand flush() a
-     null, and ctx.globalAlpha = null is 0 — every prism, cone and blob in the
-     game was being painted fully transparent. */
-  dlPush(depth,{ p:pts, c:css(fogc(col,zsum/k)), a:(opt&&opt.alpha!==undefined)?opt.alpha:undefined,
-                 s:!opt||opt.seam!==false });
-}
-/* Sutherland–Hodgman against the screen rectangle */
-function clipRect(p){
-  var L=-16, R=W+16, T=-16, B=H+16;
-  function half(pts, inside, isect){
-    var out=[], n=pts.length/2;
-    if(!n) return out;
-    for(var i=0;i<n;i++){
-      var ax=pts[i*2], ay=pts[i*2+1], j=(i+1)%n, bx=pts[j*2], by=pts[j*2+1];
-      var ai=inside(ax,ay), bi=inside(bx,by);
-      if(ai) out.push(ax,ay);
-      if(ai!==bi){ var q=isect(ax,ay,bx,by); out.push(q[0],q[1]); }
-    }
-    return out;
+  DLn++;
+  var out=[];
+  for(i=1;i<n-1;i++){
+    toView(v3[0]+ex,v3[1]+ey,v3[2]+ez);       out.push(_vx,_vy,_vz,r,g,b,alpha);
+    toView(v3[i*3]+ex,v3[i*3+1]+ey,v3[i*3+2]+ez);       out.push(_vx,_vy,_vz,r,g,b,alpha);
+    toView(v3[(i+1)*3]+ex,v3[(i+1)*3+1]+ey,v3[(i+1)*3+2]+ez); out.push(_vx,_vy,_vz,r,g,b,alpha);
   }
-  p = half(p, function(x){ return x>=L; }, function(ax,ay,bx,by){
-        var t=(L-ax)/(bx-ax); return [L, ay+(by-ay)*t]; });
-  p = half(p, function(x){ return x<=R; }, function(ax,ay,bx,by){
-        var t=(R-ax)/(bx-ax); return [R, ay+(by-ay)*t]; });
-  p = half(p, function(x,y){ return y>=T; }, function(ax,ay,bx,by){
-        var t=(T-ay)/(by-ay); return [ax+(bx-ax)*t, T]; });
-  p = half(p, function(x,y){ return y<=B; }, function(ax,ay,bx,by){
-        var t=(B-ay)/(by-ay); return [ax+(bx-ax)*t, B]; });
-  return p;
+  if(alpha<1) glTrans.push({ v:out, depth:dist });
+  else for(i=0;i<out.length;i++) glOpaque.push(out[i]);
 }
 var _px=0,_py=0,_pd=0,_ps=0;
 function project(x,y,z){ toView(x,y,z); if(_vz<0.22) return false;
   _pd=_vz; _ps=FOCAL/_vz; _px=HW+_vx*_ps; _py=HH-_vy*_ps; return true; }
+/* ── GL setup: one flat-shaded, fogged, alpha-blended program ─────────────
+   Vertices arrive already in VIEW space (toView() does the camera rotate+
+   translate on the CPU, reusing the exact same math project()/hotspots use)
+   and already carry their final lit+fogged colour — the shader's only job is
+   the perspective projection. Flat shading falls out for free: every vertex
+   of a triangle gets the same colour, so interpolation is a no-op.        */
+function buildProj(){
+  var f=1/Math.tan(FOV/2), aspect=W/H, nf=1/(GL_NEAR-GL_FAR);
+  glProjMat.set([
+    f/aspect,0,0,0,
+    0,f,0,0,
+    0,0,(GL_FAR+GL_NEAR)*nf,-1,
+    0,0,2*GL_FAR*GL_NEAR*nf,0
+  ]);
+}
+function glCompile(type,src){
+  var sh=gl.createShader(type); gl.shaderSource(sh,src); gl.compileShader(sh);
+  if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+  return sh;
+}
+var glProg, glAttrPos, glAttrCol, glUniProj, glVBO;
+(function glInit(){
+  var vs=glCompile(gl.VERTEX_SHADER,
+    'attribute vec3 aPos; attribute vec4 aColor; uniform mat4 uProj; varying vec4 vColor;'+
+    'void main(){ gl_Position = uProj * vec4(aPos.x, aPos.y, -aPos.z, 1.0); vColor = aColor; }');
+  var fs=glCompile(gl.FRAGMENT_SHADER,
+    'precision mediump float; varying vec4 vColor;'+
+    'void main(){ gl_FragColor = vec4(vColor.rgb*vColor.a, vColor.a); }');
+  glProg=gl.createProgram();
+  gl.attachShader(glProg,vs); gl.attachShader(glProg,fs); gl.linkProgram(glProg);
+  if(!gl.getProgramParameter(glProg,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(glProg));
+  gl.useProgram(glProg);
+  glAttrPos=gl.getAttribLocation(glProg,'aPos');
+  glAttrCol=gl.getAttribLocation(glProg,'aColor');
+  glUniProj=gl.getUniformLocation(glProg,'uProj');
+  glVBO=gl.createBuffer();
+  gl.enableVertexAttribArray(glAttrPos);
+  gl.enableVertexAttribArray(glAttrCol);
+  gl.clearColor(0,0,0,0);
+})();
+function glDraw(arr){
+  if(!arr.length) return;
+  var buf = arr instanceof Float32Array ? arr : new Float32Array(arr);
+  gl.bindBuffer(gl.ARRAY_BUFFER, glVBO);
+  gl.bufferData(gl.ARRAY_BUFFER, buf, gl.DYNAMIC_DRAW);
+  var stride=7*4;
+  gl.vertexAttribPointer(glAttrPos,3,gl.FLOAT,false,stride,0);
+  gl.vertexAttribPointer(glAttrCol,4,gl.FLOAT,false,stride,12);
+  gl.drawArrays(gl.TRIANGLES, 0, buf.length/7);
+}
 function flush(){
-  var list=DL.slice(0,DLn);
-  list.sort(function(a,b){ return b.d-a.d; });
-  for(var i=0;i<list.length;i++){
-    var it=list[i];
-    if(it.f){ it.f(); continue; }
-    var p=it.p, n=p.length/2;
-    ctx.beginPath(); ctx.moveTo(p[0],p[1]);
-    for(var k=1;k<n;k++) ctx.lineTo(p[k*2],p[k*2+1]);
-    ctx.closePath();
-    if(it.a!==undefined) ctx.globalAlpha=it.a;
-    ctx.fillStyle=it.c; ctx.fill();
-    if(it.s && it.d<SEAM_D){ ctx.strokeStyle=it.c; ctx.lineWidth=1.1; ctx.lineJoin='round'; ctx.stroke(); }
-    if(it.a!==undefined) ctx.globalAlpha=1;
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.useProgram(glProg);
+  gl.uniformMatrix4fv(glUniProj, false, glProjMat);
+
+  gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.depthMask(true);
+  gl.disable(gl.BLEND);
+  glDraw(glOpaque);
+
+  if(glTrans.length){
+    glTrans.sort(function(a,b){ return b.depth-a.depth; });   /* farthest first */
+    var merged=[];
+    for(var i=0;i<glTrans.length;i++){ var v=glTrans[i].v; for(var j=0;j<v.length;j++) merged.push(v[j]); }
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+    glDraw(merged);
+    gl.depthMask(true); gl.disable(gl.BLEND);
   }
-  DLn=0;
+  glOpaque.length=0; glTrans.length=0;
 }
 /* ── lighting: bright desert sun, soft sky fill, contact darkening ────────── */
 var LX=0.46, LY=0.76, LZ=0.46, AMB=0.72, STR=0.50;
@@ -566,7 +631,7 @@ function sprite(x,y,z,fn,bias){
   if(!project(x,y,z)) return;
   var sx=_px, sy=_py, sc=_ps, d=_pd;
   if(d>FAR) return;
-  dlPush(d+(bias||0), { f:function(){ fn(sx,sy,sc,d); } });
+  pushLabel(function(g,u){ g.save(); g.scale(u,u); fn(sx,sy,sc,d); g.restore(); });
 }
 /* ═══════════════════════════════════════════════════════════════════════════
    3. THE STATION — a slab of concrete in a very large desert
@@ -809,12 +874,14 @@ function drawStation(){
   stnFaceStation = DLn-n0;              /* the building + the forecourt props  */
 }
 function octxLabel(sx,sy,sc){
-  ctx.save();
-  ctx.font='bold '+(sc*0.30|0)+'px "Baloo 2", sans-serif';
-  ctx.textAlign='center';
-  ctx.fillStyle='#fff'; ctx.strokeStyle='#e0523f'; ctx.lineWidth=sc*0.05;
-  ctx.strokeText('GAS N CARS', sx, sy); ctx.fillText('GAS N CARS', sx, sy);
-  ctx.restore(); ctx.textAlign='left';
+  /* despite the name this used to paint on the low-res world canvas, which
+     made the sign blurry when CSS-upscaled — it now actually uses octx */
+  octx.save();
+  octx.font='bold '+(sc*0.30|0)+'px "Baloo 2", sans-serif';
+  octx.textAlign='center';
+  octx.fillStyle='#fff'; octx.strokeStyle='#e0523f'; octx.lineWidth=sc*0.05;
+  octx.strokeText('GAS N CARS', sx, sy); octx.fillText('GAS N CARS', sx, sy);
+  octx.restore(); octx.textAlign='left';
 }
 /* ═══════════════════════════════════════════════════════════════════════════
    4. CARS & DRIVERS
@@ -1234,37 +1301,31 @@ function drawDriver(c,B,o){
   }
 }
 function drawFire(c){
+  /* real 3D flame/smoke/spark billboards now, built straight in world space —
+     no projection or screen scaling needed, that was only ever there to
+     convert a world size into pixels for the old canvas-2D sprite draws. */
   var i, sd=c.seed, B=basis(c.yaw,0,0), o=[c.x,0,c.z], p;
-  /* seven fat flames licking up off the body */
+  /* nine fat flames licking up off the body */
   for(i=0;i<9;i++){
     p = ptOf(B,o, Math.sin(sd+i*1.7)*0.62, 0, -1.35+((i*0.56+sd)%2.5));
-    (function(t, px, pz, big){
-      sprite(px, 0.95+t*1.35, pz, function(sx,sy,sc){
-        var r = Math.min(sc*(0.20+big*0.13)*(0.55+Math.sin(t*PI)*0.75), H*0.18);
-        hndFlame(sx,sy,r, hndHeatCol(0.19+t*0.66), clamp((1-t)/0.34,0.12,1),
-                 t<0.30?HND_HEAT[0]:null);
-      },-0.7);
-    })((gTime*1.15+i*0.1111)%1, p[0], p[2], 0.55+0.45*Math.sin(sd+i*2.1));
+    var t=(gTime*1.15+i*0.1111)%1, big=0.55+0.45*Math.sin(sd+i*2.1);
+    var r = (0.20+big*0.16)*(0.5+Math.sin(t*PI)*0.9);
+    hndFlame(p[0], 0.95+t*1.35, p[2], r, hndHeatCol(0.19+t*0.66), clamp((1-t)/0.34,0.12,1),
+             t<0.30?HND_HEAT[0]:null);
   }
   /* fat grey smoke boiling off the top */
   for(i=0;i<4;i++){
     p = ptOf(B,o, Math.sin(sd+i*3.1)*0.55, 0, -1.0+((i*1.3+sd)%2.2));
-    (function(t, px, pz){
-      sprite(px, 2.0+t*2.6, pz, function(sx,sy,sc){
-        var r = Math.min(sc*(0.26+t*0.42), H*0.26);
-        hndPuff(sx,sy,r, HND_SMOKE[clamp(Math.floor(t*4),0,3)], clamp((1-t)/0.45,0.1,0.92), null);
-      },-1.1);
-    })((gTime*0.42+i*0.25)%1, p[0], p[2]);
+    var t2=(gTime*0.42+i*0.25)%1;
+    var r2 = 0.30+t2*0.62;
+    hndPuff(p[0], 2.0+t2*2.6, p[2], r2, HND_SMOKE[clamp(Math.floor(t2*4),0,3)], clamp((1-t2)/0.45,0.1,0.92), null);
   }
   /* bright sparks flicking off */
   for(i=0;i<4;i++){
     p = ptOf(B,o, Math.sin(sd*1.7+i*2.2)*0.9, 0, -1.3+((i*1.7+sd)%2.6));
-    (function(t, px, pz, a){
-      sprite(px, 0.9+t*2.2, pz, function(sx,sy,sc){
-        hndDash(sx,sy, a+t*3, Math.min(sc*0.10,32), Math.max(2.4,sc*0.022),
-                t<0.5?[255,246,190]:[255,168,58], 1-t);
-      },-1.3);
-    })((gTime*1.7+i*0.25)%1, p[0], p[2], sd+i*2.1);
+    var t3=(gTime*1.7+i*0.25)%1, a3=sd+i*2.1;
+    hndDash(p[0], 0.9+t3*2.2, p[2], a3+t3*3, 0.22, 0.018,
+            t3<0.5?[255,246,190]:[255,168,58], 1-t3);
   }
 }
 /* follow a list of waypoints, then hand back */
@@ -1930,13 +1991,13 @@ function drawTruck(){
 
   sprite(truck.x, 2.90, truck.z, function(sx,sy,sc){
     if(sc<16) return;
-    ctx.save();
-    ctx.font='bold '+(sc*0.11|0)+'px "Baloo 2",sans-serif';
-    ctx.textAlign='center'; ctx.lineJoin='round';
-    ctx.lineWidth=sc*0.030; ctx.strokeStyle='rgba(255,255,255,0.92)';
-    ctx.strokeText('TOOL DELIVERY', sx, sy);
-    ctx.fillStyle='#d94f36'; ctx.fillText('TOOL DELIVERY', sx, sy);
-    ctx.restore(); ctx.textAlign='left';
+    octx.save();
+    octx.font='bold '+(sc*0.11|0)+'px "Baloo 2",sans-serif';
+    octx.textAlign='center'; octx.lineJoin='round';
+    octx.lineWidth=sc*0.030; octx.strokeStyle='rgba(255,255,255,0.92)';
+    octx.strokeText('TOOL DELIVERY', sx, sy);
+    octx.fillStyle='#d94f36'; octx.fillText('TOOL DELIVERY', sx, sy);
+    octx.restore(); octx.textAlign='left';
   },-1);
 }
 function openTruck(){
@@ -2516,17 +2577,10 @@ function drawBallProps(){
     bgBatMesh(Bd, [BAT.down.x, 0.050, BAT.down.z], 0.80, 1, [198,152,96]);
   }
   if(BB.st==='pitch'||BB.st==='hit'||BB.st==='loose'||BB.st==='thrown'){
-    sprite(BB.x, BB.y, BB.z, function(sx,sy,sc){
-      var r=sc*0.048; if(r<0.7) return;
-      ctx.beginPath(); ctx.arc(sx,sy,r,0,TAU);
-      ctx.fillStyle='#f7f5ec'; ctx.fill();
-      ctx.lineWidth=Math.max(0.7,r*0.13); ctx.strokeStyle='#b9b3a2'; ctx.stroke();
-      if(r>3){
-        ctx.strokeStyle='#d1533f'; ctx.lineWidth=Math.max(0.7,r*0.15);
-        ctx.beginPath(); ctx.arc(sx-r*0.55, sy, r*0.86, -0.9, 0.9); ctx.stroke();
-        ctx.beginPath(); ctx.arc(sx+r*0.55, sy, r*0.86, PI-0.9, PI+0.9); ctx.stroke();
-      }
-    }, -0.05);
+    /* real geometry now instead of a screen-space sprite circle, so it gets
+       correctly hidden behind whatever is actually in front of it */
+    meshBlobB(basis(BB.t*6,BB.t*4,0), [BB.x,BB.y,BB.z], 0,0,0, 0.048,0.048,0.048, 3,
+              [247,245,236], 1, 0.03);
   }
   /* he wants you to know he has a bat */
   if(BG.st==='offer' && dist2(BG.x,BG.z,camX,camZ)<17){
@@ -2728,6 +2782,7 @@ function closeSheet(){ sheetOpen=false; veil.classList.remove('on'); sheetEl.inn
    ═══════════════════════════════════════════════════════════════════════════ */
 function drawWorldLabels(){
   octx.clearRect(0,0,OW,OH);
+  if(vignette){ octx.fillStyle=vignette; octx.fillRect(0,0,OW,OH); }
   octx.textAlign='center';
   for(var i=0;i<LABELn;i++) LABELS[i](octx,UPS);
   octx.textAlign='left';
@@ -2886,8 +2941,8 @@ function stnPumps(B0){
     }
     sprite(P.x, 1.30, P.z-0.32, function(sx,sy,sc){
       if(sc<26) return;
-      ctx.fillStyle='#7dff9a'; ctx.font='bold '+(sc*0.10|0)+'px monospace'; ctx.textAlign='center';
-      ctx.fillText('$'+FUEL_PRICE.toFixed(2), sx, sy+sc*0.03); ctx.textAlign='left';
+      octx.fillStyle='#7dff9a'; octx.font='bold '+(sc*0.10|0)+'px monospace'; octx.textAlign='center';
+      octx.fillText('$'+FUEL_PRICE.toFixed(2), sx, sy+sc*0.03); octx.textAlign='left';
     }, -0.4);
   }
 }
@@ -3089,21 +3144,21 @@ function stnShield(B0){
   stnQZ(Z+0.098, X-0.76, X+0.76, 3.38, 5.18, stnMULL,     1, 0);
   sprite(X, 4.28, Z-0.12, function(sx,sy,sc){
     if(sc<12) return;
-    ctx.save(); ctx.textAlign='center'; ctx.fillStyle='#1b2436';
-    ctx.font='bold '+(sc*0.24|0)+'px "Baloo 2",sans-serif';
-    ctx.fillText('ROUTE', sx, sy-sc*0.16);
-    ctx.font='bold '+(sc*0.60|0)+'px "Baloo 2",sans-serif';
-    ctx.fillText('67', sx, sy+sc*0.50);
-    ctx.restore(); ctx.textAlign='left';
+    octx.save(); octx.textAlign='center'; octx.fillStyle='#1b2436';
+    octx.font='bold '+(sc*0.24|0)+'px "Baloo 2",sans-serif';
+    octx.fillText('ROUTE', sx, sy-sc*0.16);
+    octx.font='bold '+(sc*0.60|0)+'px "Baloo 2",sans-serif';
+    octx.fillText('67', sx, sy+sc*0.50);
+    octx.restore(); octx.textAlign='left';
   }, -0.8);
   /* the little arrow board under it */
   stnBoxD(B0,o, 0, 2.30, 0, 0.66, 0.30, 0.06, stnORANGE);
   sprite(X, 2.30, Z-0.11, function(sx,sy,sc){
     if(sc<22) return;
-    ctx.save(); ctx.textAlign='center'; ctx.fillStyle='#3a2409';
-    ctx.font='bold '+(sc*0.26|0)+'px "Baloo 2",sans-serif';
-    ctx.fillText('GAS ▶', sx, sy+sc*0.10);
-    ctx.restore(); ctx.textAlign='left';
+    octx.save(); octx.textAlign='center'; octx.fillStyle='#3a2409';
+    octx.font='bold '+(sc*0.26|0)+'px "Baloo 2",sans-serif';
+    octx.fillText('GAS ▶', sx, sy+sc*0.10);
+    octx.restore(); octx.textAlign='left';
   }, -0.8);
 }
 function stnPriceSign(B0){
@@ -3117,12 +3172,12 @@ function stnPriceSign(B0){
   stnQZ(Z+0.096, X-1.20, X+1.20, 2.62, 4.40, stnMULL,  1, 0);
   sprite(X, 3.52, Z-0.13, function(sx,sy,sc){
     if(sc<14) return;
-    ctx.save(); ctx.textAlign='center';
-    ctx.fillStyle='#d0552f'; ctx.font='bold '+(sc*0.28|0)+'px "Baloo 2",sans-serif';
-    ctx.fillText('REGULAR', sx, sy-sc*0.20);
-    ctx.fillStyle='#22303f'; ctx.font='bold '+(sc*0.50|0)+'px "Baloo 2",sans-serif';
-    ctx.fillText('$'+FUEL_PRICE.toFixed(2), sx, sy+sc*0.34);
-    ctx.restore(); ctx.textAlign='left';
+    octx.save(); octx.textAlign='center';
+    octx.fillStyle='#d0552f'; octx.font='bold '+(sc*0.28|0)+'px "Baloo 2",sans-serif';
+    octx.fillText('REGULAR', sx, sy-sc*0.20);
+    octx.fillStyle='#22303f'; octx.font='bold '+(sc*0.50|0)+'px "Baloo 2",sans-serif';
+    octx.fillText('$'+FUEL_PRICE.toFixed(2), sx, sy+sc*0.34);
+    octx.restore(); octx.textAlign='left';
   }, -0.8);
 }
 function stnRoadside(B0){ stnGuardrail(B0); stnPoles(B0); stnShield(B0); stnPriceSign(B0); }
@@ -3503,81 +3558,93 @@ function hndHeatCol(t){
   var i = clamp(Math.floor(t*HND_HEAT.length), 0, HND_HEAT.length-1);
   return HND_HEAT[i];
 }
-function hndPuff(sx,sy,r,col,alpha,core){
-  if(r<1.0) return;
-  var g=ctx, w=Math.max(1.6, r*0.12), i;
+/* ── particle billboards ────────────────────────────────────────────────
+   These used to be canvas-2D screen-space draws, always painted on top of
+   the 3D world with no real occlusion. Now they are actual camera-facing
+   geometry in world space, submitted through the same emitPoly path as
+   everything else — a z-buffer hides them behind whatever is really in
+   front, and fog fades them at distance, both for free.
+
+   A billboard's own vertices are near-coplanar (all offset from the particle
+   centre within the camera's right/up plane), so several discs stacked to
+   build one blob can end up at almost exactly the same depth and z-fight.
+   `nudge` is a small integer — each disc in a cluster gets its own index, so
+   every layer resolves to a deterministic front-to-back order regardless of
+   true depth precision.                                                    */
+function billP(x,y,z,a,b){                 /* a = along camera-right, b = "screen down" */
+  return [x+a*rx-b*ux, y+a*ry-b*uy, z+a*rz-b*uz];
+}
+function billDisc(x,y,z,r,col,alpha,nudge){
+  if(r<0.003) return;
+  var segs=10, v=[], i,t;
+  for(i=0;i<segs;i++){ t=i/segs*TAU; var p=billP(x,y,z,Math.cos(t)*r,Math.sin(t)*r); v.push(p[0],p[1],p[2]); }
+  emitPoly(v, col, { alpha:alpha, nudge:nudge });
+}
+function billDiscAt(x,y,z,offA,offB,r,col,alpha,nudge){
+  var c=billP(x,y,z,offA,offB);
+  billDisc(c[0],c[1],c[2], r, col, alpha, nudge);
+}
+function billDash(x,y,z,ang,len,w,col,alpha){
+  var dx=Math.cos(ang), dy=Math.sin(ang), px=-dy, py=dx, hw=w*0.5, i;
+  var corners=[[-px*hw,-py*hw],[px*hw,py*hw],[dx*len+px*hw,dy*len+py*hw],[dx*len-px*hw,dy*len-py*hw]];
+  var v=[];
+  for(i=0;i<4;i++){ var p=billP(x,y,z,corners[i][0],corners[i][1]); v.push(p[0],p[1],p[2]); }
+  emitPoly(v, col, { alpha:alpha });
+}
+function hndPuff(x,y,z,r,col,alpha,core){
+  if(r<0.003) return;
+  var w=Math.max(0.003, r*0.12), i;
   var L=[[0,0,1.00],[0.60,-0.34,0.72],[-0.56,-0.16,0.66],[0.02,0.36,0.60]];
-  g.globalAlpha = alpha;
-  g.fillStyle = css(shade(col,0.50));
-  g.beginPath();
-  for(i=0;i<4;i++){ var R=r*L[i][2]+w, X=sx+r*L[i][0], Y=sy+r*L[i][1];
-    g.moveTo(X+R,Y); g.arc(X,Y,R,0,TAU); }
-  g.fill();
-  g.fillStyle = css(col);
-  g.beginPath();
-  for(i=0;i<4;i++){ R=r*L[i][2]; X=sx+r*L[i][0]; Y=sy+r*L[i][1];
-    g.moveTo(X+R,Y); g.arc(X,Y,R,0,TAU); }
-  g.fill();
-  if(core && r>4){
-    g.fillStyle = css(core);
-    g.beginPath(); g.arc(sx-r*0.16, sy-r*0.14, r*0.44, 0, TAU); g.fill();
-  }
-  g.globalAlpha = 1;
+  var rim=shade(col,0.50);
+  for(i=0;i<4;i++) billDiscAt(x,y,z, L[i][0]*r,L[i][1]*r, L[i][2]*r+w, rim, alpha, i);
+  for(i=0;i<4;i++) billDiscAt(x,y,z, L[i][0]*r,L[i][1]*r, L[i][2]*r,   col, alpha, i+4);
+  if(core && r>0.014) billDiscAt(x,y,z, -r*0.16,-r*0.14, r*0.44, core, alpha, 8);
 }
-function hndFlame(sx,sy,r,col,alpha,core){
-  if(r<1.0) return;
-  var g=ctx, w=Math.max(1.6, r*0.12), i, R,X,Y;
+function hndFlame(x,y,z,r,col,alpha,core){
+  if(r<0.003) return;
+  var w=Math.max(0.003, r*0.12), i;
   var L=[[0,0,1.0],[0.22,-0.86,0.66],[-0.02,-1.52,0.36],[-0.34,0.44,0.72]];
-  g.globalAlpha=alpha;
-  g.fillStyle=css(shade(col,0.48));
-  g.beginPath();
-  for(i=0;i<4;i++){ R=r*L[i][2]+w; X=sx+r*L[i][0]; Y=sy+r*L[i][1];
-    g.moveTo(X+R,Y); g.arc(X,Y,R,0,TAU); }
-  g.fill();
-  g.fillStyle=css(col);
-  g.beginPath();
-  for(i=0;i<4;i++){ R=r*L[i][2]; X=sx+r*L[i][0]; Y=sy+r*L[i][1];
-    g.moveTo(X+R,Y); g.arc(X,Y,R,0,TAU); }
-  g.fill();
-  if(core && r>5){
-    g.fillStyle=css(core);
-    g.beginPath();
-    g.moveTo(sx+r*0.36,sy+r*0.06); g.arc(sx,sy+r*0.06,r*0.36,0,TAU);
-    g.moveTo(sx+r*0.32,sy-r*0.56); g.arc(sx+r*0.10,sy-r*0.56,r*0.22,0,TAU);
-    g.fill();
+  var rim=shade(col,0.48);
+  for(i=0;i<4;i++) billDiscAt(x,y,z, L[i][0]*r,L[i][1]*r, L[i][2]*r+w, rim, alpha, i);
+  for(i=0;i<4;i++) billDiscAt(x,y,z, L[i][0]*r,L[i][1]*r, L[i][2]*r,   col, alpha, i+4);
+  if(core && r>0.017){
+    billDiscAt(x,y,z, 0,      r*0.06,  r*0.36, core, alpha, 8);
+    billDiscAt(x,y,z, r*0.10,-r*0.56,  r*0.22, core, alpha, 9);
   }
-  g.globalAlpha=1;
 }
-function hndDash(sx,sy,ang,len,w,col,alpha){
-  var g=ctx;
-  g.globalAlpha=alpha; g.strokeStyle=css(col); g.lineWidth=w; g.lineCap='round';
-  g.beginPath(); g.moveTo(sx,sy); g.lineTo(sx+Math.cos(ang)*len, sy+Math.sin(ang)*len); g.stroke();
-  g.globalAlpha=1;
+function hndDash(x,y,z,ang,len,w,col,alpha){
+  billDash(x,y,z,ang,len,w,col,alpha);
 }
 function hndBlobFX(f){
-  sprite(f.x,f.y,f.z,function(sx,sy,sc){
-    var u = clamp(f.t/f.life,0,1);
-    var r = clamp(f.r*sc*1.9*(1+u*0.5), 3.5, H*0.036);
-    var k = f.kind;
-    if(k==='spark'){
-      hndDash(sx,sy, (f.ang||0)+u*2.2, r*2.4, Math.max(1.6,r*0.55),
-              u<0.5?[255,246,196]:[255,176,64], 1-u*u);
-      return;
-    }
-    if(k==='smoke'){
-      var sc2 = HND_SMOKE[clamp(Math.floor(u*HND_SMOKE.length),0,3)];
-      hndPuff(sx,sy,r*1.25, sc2, (1-u)*0.85, null);
-      return;
-    }
-    if(k==='fire'){
-      hndFlame(sx,sy,r*1.15, hndHeatCol(0.19+u*0.62), clamp(1.25-u,0.2,1),
-               u<0.45?HND_HEAT[0]:null);
-      return;
-    }
-    /* liquids, suds, paint, glass — solid colour blob, dark rim, bright core */
-    hndPuff(sx,sy,r, f.col, clamp(1.25-u*1.25,0,1), mixc(f.col,[255,255,255],0.55));
-  },-0.45);
+  if(dist2(f.x,f.z,camX,camZ)>140) return;
+  var u = clamp(f.t/f.life,0,1);
+  var r = Math.max(0.006, f.r*1.9*(1+u*0.5));
+  /* many particles (scrub suds especially) spawn right at a hotspot's aim
+     point, which can sit level with or a hair inside the surface it
+     decorates — invisible under a real z-buffer, where the old painter's
+     algorithm was forgiving about it. Pull every particle a few centimetres
+     toward the camera so it always wins that contest. */
+  var px=f.x-fx*0.035, py=f.y-fy*0.035, pz=f.z-fz*0.035;
+  var k = f.kind;
+  if(k==='spark'){
+    hndDash(px,py,pz, (f.ang||0)+u*2.2, r*2.4, Math.max(0.005,r*0.55),
+            u<0.5?[255,246,196]:[255,176,64], 1-u*u);
+    return;
+  }
+  if(k==='smoke'){
+    var sc2 = HND_SMOKE[clamp(Math.floor(u*HND_SMOKE.length),0,3)];
+    hndPuff(px,py,pz, r*1.25, sc2, (1-u)*0.85, null);
+    return;
+  }
+  if(k==='fire'){
+    hndFlame(px,py,pz, r*1.15, hndHeatCol(0.19+u*0.62), clamp(1.25-u,0.2,1),
+             u<0.45?HND_HEAT[0]:null);
+    return;
+  }
+  /* liquids, suds, paint, glass — solid colour blob, dark rim, bright core */
+  hndPuff(px,py,pz, r, f.col, clamp(1.25-u*1.25,0,1), mixc(f.col,[255,255,255],0.55));
 }
+
 function hndBubbleIcon(g, ico, X, Y, s, col){
   var i;
   g.save(); g.translate(X,Y); g.scale(s/100, s/100);
@@ -3712,11 +3779,10 @@ function render(){
   setCamBasis();
   drawSky();
   drawClouds();
-  DLn=0;
+  DLn=0; glOpaque.length=0; glTrans.length=0;
   drawGround();
   drawBallField();
   drawShadows();
-  flush();                       /* ground layer: floor, decals, shadows */
   drawStation();
   drawTruck();
   for(var i=0;i<CARS.length;i++) drawCar(CARS[i]);
@@ -3726,7 +3792,6 @@ function render(){
   drawHeld();
   queueBubbles();
   flush();
-  if(vignette){ ctx.fillStyle=vignette; ctx.fillRect(0,0,W,H); }
   drawWorldLabels();
   camYaw=_cy; camPitch=_cp;                        /* shake was visual only */
 }
