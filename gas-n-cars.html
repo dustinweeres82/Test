@@ -2451,7 +2451,9 @@ document.addEventListener('pointerlockchange', function(){
 });
 document.addEventListener('mousemove', function(e){
   if(!locked) return;
-  camYaw -= e.movementX*0.0022;
+  /* the camera's right vector is +x at yaw 0, so a rightward mouse move has to
+     RAISE the yaw — subtracting turned the view the wrong way */
+  camYaw += e.movementX*0.0022;
   camPitch = clamp(camPitch - e.movementY*0.0022, -1.2, 1.1);
 });
 function walk(dt){
