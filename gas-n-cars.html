@@ -850,16 +850,50 @@ function drawClouds(){
   }
   ctx.restore();
 }
-/* the desert floor: one big quad, then the lot and road painted on top */
+/* the desert floor: one big quad, then the lot and road painted on top.
+   Once anything has ever been dug or built up, that single quad can't be
+   used as-is: it sits flat at y=0 over the WHOLE map, and this is a real
+   z-buffered renderer, so it would sit in front of (and hide) any pit
+   dug below y=0 — a mound poking up above y=0 is naturally fine, only
+   holes are a problem. So once TERRAIN_CHUNKS is non-empty, the floor is
+   tessellated into tiles exactly matching the terrain engine's own chunk
+   grid, and any tile a chunk has actually meshed (it drew a real surface
+   there, at the correct height) is skipped rather than covered over. The
+   playable map is small, so this costs nothing meaningful, and the fast
+   single-quad path stays exactly as before for every game that never
+   touches a shovel. */
+function terrainMeshedAt(x,z){
+  var c=terrainCol(x,z), ch=TERRAIN_CHUNKS[terrainChunkKey(c[0],c[1])];
+  return !!(ch && ch.topTris && ch.topTris.length);
+}
 function drawGround(){
-  var R=420;
-  emitPoly([camX-R,0,camZ-R, camX+R,0,camZ-R, camX+R,0,camZ+R, camX-R,0,camZ+R],
-           lit(C_SAND,0,1,0), { depth:FAR-1, seam:false });
+  var R=420, anyChunk=false;
+  for(var chKey in TERRAIN_CHUNKS){ anyChunk=true; break; }
+  if(!anyChunk){
+    emitPoly([camX-R,0,camZ-R, camX+R,0,camZ-R, camX+R,0,camZ+R, camX-R,0,camZ+R],
+             lit(C_SAND,0,1,0), { depth:FAR-1, seam:false });
+  } else {
+    var wcell=TERRAIN_CHUNK*TERRAIN_CELL;
+    var chx0=Math.floor(terrainCol(-27,0)[0]/TERRAIN_CHUNK), chx1=Math.floor(terrainCol(27,0)[0]/TERRAIN_CHUNK);
+    var chz0=Math.floor(terrainCol(0,-35)[1]/TERRAIN_CHUNK), chz1=Math.floor(terrainCol(0,27)[1]/TERRAIN_CHUNK);
+    for(var ci=chx0; ci<=chx1; ci++) for(var cj=chz0; cj<=chz1; cj++){
+      var ch=TERRAIN_CHUNKS[ci+','+cj];
+      if(ch && ch.topTris && ch.topTris.length) continue;
+      var wx0=ci*wcell, wz0=cj*wcell, wx1=wx0+wcell, wz1=wz0+wcell;
+      emitPoly([wx0,0,wz0, wx1,0,wz0, wx1,0,wz1, wx0,0,wz1], lit(C_SAND,0,1,0), { depth:FAR-1, seam:false });
+    }
+    var covX0=chx0*wcell, covX1=(chx1+1)*wcell, covZ0=chz0*wcell, covZ1=(chz1+1)*wcell;
+    emitPoly([camX-R,0,camZ-R, camX+R,0,camZ-R, camX+R,0,covZ0, camX-R,0,covZ0], lit(C_SAND,0,1,0), { depth:FAR-1, seam:false });
+    emitPoly([camX-R,0,covZ1, camX+R,0,covZ1, camX+R,0,camZ+R, camX-R,0,camZ+R], lit(C_SAND,0,1,0), { depth:FAR-1, seam:false });
+    emitPoly([camX-R,0,covZ0, covX0,0,covZ0, covX0,0,covZ1, camX-R,0,covZ1], lit(C_SAND,0,1,0), { depth:FAR-1, seam:false });
+    emitPoly([covX1,0,covZ0, camX+R,0,covZ0, camX+R,0,covZ1, covX1,0,covZ1], lit(C_SAND,0,1,0), { depth:FAR-1, seam:false });
+  }
   /* sand mottling near the player so the floor is not one flat wash */
   var cx=Math.round(camX/6)*6, cz=Math.round(camZ/6)*6;
   for(var i=-3;i<=3;i++) for(var j=-3;j<=3;j++){
     var x=cx+i*6, z=cz+j*6;
     if(x>LOT.x0-2&&x<LOT.x1+2&&z>LOT.z0-2&&z<LOT.z1+2) continue;
+    if(anyChunk && terrainMeshedAt(x,z)) continue;
     var s=rngFrom((x*7919+z*104729)|0);
     if(s()>0.55) groundQuad(x+s()*4-2, z+s()*4-2, 2.4+s()*2, 2.0+s()*2, s()*TAU,
                             mixc(C_SAND,C_SAND2,0.5+s()*0.5), 0.5, 0.008);
@@ -1517,7 +1551,7 @@ var TOOLS = [
   { id:'fireext',key:'9', name:'FIRE EXT',g:'&#129519;', owned:false, price:140,
     d:'Puts out cars. Also works on people, if you are that sort.' },
   { id:'shovel', key:'H', name:'SHOVEL', g:'&#9935;',    owned:false, price:70,
-    d:'Dig anywhere the ground is clear. Who knows what is down there.' },
+    d:'Hold to dig anywhere the ground is clear, right-click-hold to pile dirt back up.' },
   { id:'bat',    key:'0', name:'BAT',    g:'&#9918;',    owned:false, price:0, hidden:true,
     d:'Buford\u2019s bat. Swing with the mouse. G puts it down.' }
 ];
@@ -1633,7 +1667,7 @@ function updateAim(){
      the ground is actually open (not inside a building, over a pump, etc) */
   if(!aim && tool==='shovel'){
     var gp=groundAimPoint(4.2);
-    if(gp && !blocked(gp.x,gp.z)) aim={ kind:'ground', x:gp.x, y:0, z:gp.z, r:0 };
+    if(gp && !blocked(gp.x,gp.z,true)) aim={ kind:'ground', x:gp.x, y:0, z:gp.z, r:0 };
   }
   /* a voxel-destructible hotspot is just "roughly looking at this thing" —
      resolve its actual model/placement/removal-callback, and for a
@@ -1688,7 +1722,7 @@ function actionFor(h){
     return { t:'Take the payment' };
   }
   if(h.kind==='oilCan') return heldOil ? null : { t:'Grab a quart of oil' };
-  if(h.kind==='ground') return { t:'Hold to dig', hold:true };
+  if(h.kind==='ground') return { t:'Hold to dig &middot; right-click to build up', hold:true };
   if(h.kind==='customModel') return voxelDestructAction(h);
   if(h.kind==='slotStation' || h.kind==='slotCar') return voxelDestructAction(h);
   if(h.kind==='candyShelf') return { t:'Rearrange every shelf', bad:true };
@@ -1826,7 +1860,7 @@ function holdUse(dt){
   if(!h||!a||!a.hold){ if(pumping) stopPump(); digProgress=0; return; }
   if(h.kind==='ground'){
     digProgress+=dt;
-    if(digProgress>=1.1){ digProgress=0; addDigHole(h.x,h.z); }
+    if(digProgress>=1.1){ digProgress=0; digAt(h.x,h.z); }
     return;
   }
   var c=h.car;
@@ -2032,40 +2066,130 @@ function addChaos(n){ chaosScore=clamp(chaosScore+n,0,100); }
 
 /* ── the least dignified prank in the game ───────────────────────────────── */
 var POOP_PILES=[], poopTimer=rnd(10,20), heldPoop=false, poopSupply=0;
-/* ── the shovel: dig anywhere the ground is open ─────────────────────────── */
-var DIG_HOLES=[], digProgress=0;
-/* where the camera is currently looking at the ground plane (y=0), or null
-   if it isn't looking down far enough or the spot is out of reach */
+/* ── the shovel: a real voxel terrain, not a decal ────────────────────────
+   The ground stays the existing flat quad everywhere untouched — terrain
+   only grows real cube geometry around a dig or a build, chunked so an
+   edit only ever remeshes its own small neighbourhood, not the whole
+   ~52x60 unit map. A column's height is a signed cell count relative to
+   the existing flat ground at y=0 (negative = dug out, positive = built
+   up); a chunk with no modified column in it draws nothing at all and the
+   flat ground plane shows straight through, so most of the map never
+   costs anything. */
+var TERRAIN_CELL=0.5, TERRAIN_FLOOR=-6, TERRAIN_CEIL=6, TERRAIN_CHUNK=8, TERRAIN_WALK_LIMIT=3;
+var TERRAIN_TOP_COL=[186,158,107], TERRAIN_SIDE_COL=[112,86,56];   /* TOP_COL matches C_SAND so the seam back to flat ground is invisible */
+var TERRAIN_H={}, TERRAIN_CHUNKS={}, digProgress=0, buildProgress=0, camGroundY=0;
+function terrainCol(x,z){ return [Math.floor(x/TERRAIN_CELL), Math.floor(z/TERRAIN_CELL)]; }
+function terrainHeightAt(x,z){
+  var c=terrainCol(x,z);
+  return (TERRAIN_H[c[0]+','+c[1]]||0)*TERRAIN_CELL;
+}
+/* where the camera is looking at the terrain surface, or null if it isn't
+   looking down far enough or the spot is out of reach — a few fixed-point
+   passes so it converges onto the real (possibly dug/built) surface height
+   instead of always assuming the old flat y=0 */
 function groundAimPoint(maxDist){
-  if(fy>=-0.05) return null;
-  var t=-camY/fy;
-  if(t<=0.3 || t>maxDist) return null;
-  return { x:camX+fx*t, z:camZ+fz*t };
-}
-function addDigHole(x,z){
-  for(var i=0;i<DIG_HOLES.length;i++){
-    if(dist2(x,z,DIG_HOLES[i].x,DIG_HOLES[i].z)<1.0){ toast('Already dug there.'); return; }
+  var y=0;
+  for(var iter=0;iter<3;iter++){
+    if(fy>=-0.05) return null;
+    var t=-(camY-y)/fy;
+    if(t<=0.3 || t>maxDist) return null;
+    var gx=camX+fx*t, gz=camZ+fz*t;
+    if(iter===2) return { x:gx, z:gz };
+    y=terrainHeightAt(gx,gz);
   }
-  if(DIG_HOLES.length>=40) DIG_HOLES.shift();
-  DIG_HOLES.push({ x:x, z:z, seed:(Math.random()*100000)|0 });
-  addChaos(1);
-  toast(pick(['Dug a hole.','There. A hole.','Turned over some dirt.','Found nothing. Yet.']));
-  for(var k=0;k<8;k++) FX.push({ x:x+rnd(-0.3,0.3), y:0.1+rnd(0,0.2), z:z+rnd(-0.3,0.3),
-    vy:rnd(0.6,1.3), t:0, life:rnd(0.3,0.5), r:0.03+rnd(0,0.02), col:[120,96,70] });
 }
-function drawDigHoles(){
-  for(var i=0;i<DIG_HOLES.length;i++){
-    var h=DIG_HOLES[i];
-    groundQuad(h.x, h.z, 0.55, 0.55, 0, [58,48,38], 0.9, 0.022);
-    var rn=rngFrom(h.seed), B=basis(0,0,0), o=[h.x,0,h.z];
-    for(var k=0;k<5;k++){
-      var ang=rn()*PI*2, rad=0.35+rn()*0.25;
-      var mx=Math.sin(ang)*rad, mz=Math.cos(ang)*rad;
-      var sx=0.09+rn()*0.06, sy=0.06+rn()*0.05, sz=0.09+rn()*0.06;
-      var t=140+((rn()*40)|0);
-      drawBox(B,o, mx, sy*0.8, mz, sx, sy, sz, [t*0.62|0, t*0.5|0, t*0.36|0], null);
+function terrainChunkKey(cx,cz){ return Math.floor(cx/TERRAIN_CHUNK)+','+Math.floor(cz/TERRAIN_CHUNK); }
+function markTerrainDirty(cx,cz){
+  var seen={};
+  for(var dx=-1;dx<=1;dx++) for(var dz=-1;dz<=1;dz++){
+    var key=terrainChunkKey(cx+dx,cz+dz);
+    if(seen[key]) continue; seen[key]=true;
+    (TERRAIN_CHUNKS[key] || (TERRAIN_CHUNKS[key]={topTris:[],sideTris:[],dirty:false})).dirty=true;
+  }
+}
+/* raise (positive delta) or lower (negative) every column within radius of
+   (x,z) by one cell, clamped to the dig/build depth caps */
+function editTerrain(x,z,delta,radius){
+  var c0=terrainCol(x,z), r2=radius*radius, ir=Math.ceil(radius), touched=0;
+  for(var dx=-ir;dx<=ir;dx++) for(var dz=-ir;dz<=ir;dz++){
+    if(dx*dx+dz*dz>r2) continue;
+    var cx=c0[0]+dx, cz=c0[1]+dz, key=cx+','+cz;
+    var h=clamp((TERRAIN_H[key]||0)+delta, TERRAIN_FLOOR+1, TERRAIN_CEIL);
+    if(h===0) delete TERRAIN_H[key]; else TERRAIN_H[key]=h;
+    markTerrainDirty(cx,cz);
+    touched++;
+  }
+  return touched;
+}
+/* same hidden-face-culled cube meshing every other voxel grid in this game
+   uses, split into two buckets by face direction — the top face (matches
+   the flat ground colour) versus every other face (a darker subsoil tone),
+   since a plain heightfield only ever needs those two materials */
+function voxelsToTrisTerrain(cells, cellSize){
+  var top=[], side=[];
+  for(var key in cells){
+    var p=key.split(','), cx=+p[0], cy=+p[1], cz=+p[2];
+    for(var d=0;d<6;d++){
+      var dir=VOX_DIRS[d];
+      var nk=(cx+dir.d[0])+','+(cy+dir.d[1])+','+(cz+dir.d[2]);
+      if(cells[nk]) continue;
+      var c=dir.c, q=[];
+      for(var k=0;k<4;k++) q.push([(cx+c[k][0])*cellSize,(cy+c[k][1])*cellSize,(cz+c[k][2])*cellSize]);
+      var bucket=(dir.d[1]===1)?top:side;
+      bucket.push([q[0][0],q[0][1],q[0][2], q[1][0],q[1][1],q[1][2], q[2][0],q[2][1],q[2][2]]);
+      bucket.push([q[0][0],q[0][1],q[0][2], q[2][0],q[2][1],q[2][2], q[3][0],q[3][1],q[3][2]]);
     }
   }
+  return { top:top, side:side };
+}
+function remeshTerrainChunk(key){
+  var chunk=TERRAIN_CHUNKS[key], p=key.split(','), chx=+p[0], chz=+p[1];
+  var x0=chx*TERRAIN_CHUNK, z0=chz*TERRAIN_CHUNK;
+  chunk.dirty=false;
+  var anyMod=false;
+  for(var lx=0;lx<TERRAIN_CHUNK && !anyMod;lx++)
+    for(var lz=0;lz<TERRAIN_CHUNK;lz++) if(TERRAIN_H[(x0+lx)+','+(z0+lz)]){ anyMod=true; break; }
+  if(!anyMod){ chunk.topTris=[]; chunk.sideTris=[]; return; }
+  var cells={};
+  for(var ix=-1;ix<=TERRAIN_CHUNK;ix++) for(var iz=-1;iz<=TERRAIN_CHUNK;iz++){
+    var cx=x0+ix, cz=z0+iz, h=TERRAIN_H[cx+','+cz]||0;
+    for(var cy=TERRAIN_FLOOR;cy<h;cy++) cells[cx+','+cy+','+cz]=true;
+  }
+  var built=voxelsToTrisTerrain(cells, TERRAIN_CELL);
+  chunk.topTris=built.top; chunk.sideTris=built.side;
+}
+function drawTerrainChunks(){
+  for(var key in TERRAIN_CHUNKS){
+    var c=TERRAIN_CHUNKS[key];
+    if(c.dirty) remeshTerrainChunk(key);
+    /* a small +y nudge on the top faces only: an untouched border column
+       inside an otherwise-dug/built chunk sits at exactly y=0, coincident
+       with the flat ground plane underneath it, which z-fights without this */
+    if(c.topTris.length) drawModelTris(c.topTris, TERRAIN_TOP_COL, 0,0.003,0, 0, 1, 0);
+    if(c.sideTris.length) drawModelTris(c.sideTris, TERRAIN_SIDE_COL, 0,0,0, 0, 1, 0);
+  }
+}
+function spawnDirtFX(x,z,col){
+  var y=terrainHeightAt(x,z);
+  for(var k=0;k<8;k++) FX.push({ x:x+rnd(-0.3,0.3), y:y+0.1+rnd(0,0.2), z:z+rnd(-0.3,0.3),
+    vy:rnd(0.6,1.3), t:0, life:rnd(0.3,0.5), r:0.03+rnd(0,0.02), col:col });
+}
+function digAt(x,z){
+  if(!editTerrain(x,z,-1,1.4)) return;
+  addChaos(1);
+  toast(pick(['Dug in.','There. A hole.','Turned over some dirt.','Deeper now.']));
+  spawnDirtFX(x,z,[120,96,70]);
+}
+function buildAt(x,z){
+  if(!editTerrain(x,z,1,1.4)) return;
+  addChaos(0.5);
+  toast(pick(['Piled it up.','A little mound.','Built that up some.']));
+  spawnDirtFX(x,z,[150,120,90]);
+}
+function holdBuild(dt){
+  if(!aim || aim.kind!=='ground'){ buildProgress=0; return; }
+  buildProgress+=dt;
+  if(buildProgress>=1.1){ buildProgress=0; buildAt(aim.x,aim.z); }
 }
 var POOP_ANCHOR={ panelL:[-0.90,1.00,-0.20], panelR:[0.90,1.00,-0.20], front:[0,0.90,-2.05] };
 function spawnPoopPile(){
@@ -4695,12 +4819,18 @@ window.addEventListener('keydown', function(e){
 });
 window.addEventListener('keyup', function(e){ K[e.code]=false; });
 window.addEventListener('blur', function(){ K={}; mouseDown=false; });
+var mouseDownR=false;
 cv.addEventListener('mousedown', function(e){
   if(sheetOpen) return;
   if(!locked){ cv.requestPointerLock(); return; }
   if(e.button===0){ mouseDown=true; pressUse(); }
+  if(e.button===2){ mouseDownR=true; }
 });
-window.addEventListener('mouseup', function(){ mouseDown=false; if(pumping) stopPump(); });
+cv.addEventListener('contextmenu', function(e){ e.preventDefault(); });
+window.addEventListener('mouseup', function(e){
+  if(e.button===2){ mouseDownR=false; buildProgress=0; return; }
+  mouseDown=false; if(pumping) stopPump();
+});
 document.addEventListener('pointerlockchange', function(){
   locked = document.pointerLockElement===cv;
   document.body.classList.toggle('unlocked', !locked);
@@ -4714,10 +4844,11 @@ document.addEventListener('mousemove', function(e){
 });
 var slipT=0, slipCd=0;
 function walk(dt){
+  camGroundY=lerp(camGroundY, terrainHeightAt(camX,camZ), clamp(dt*8,0,1));
   if(slipCd>0) slipCd-=dt;
   if(slipT>0){
     slipT-=dt;
-    camY = 1.50 + Math.sin(gTime*38)*0.035;
+    camY = 1.50 + camGroundY + Math.sin(gTime*38)*0.035;
     return;
   }
   var mx=0, mz=0;
@@ -4752,7 +4883,7 @@ function walk(dt){
       if(dist2(camX,camZ,P.x,P.z)>4.6){ heldNozzle=null; stopPump(); toast('The hose pulled out of your hand'); }
     }
   }
-  camY = 1.68 + Math.sin(bobT)*0.022;
+  camY = 1.68 + camGroundY + Math.sin(bobT)*0.022;
 }
 /* a real room's walls, as a thin solid band around its perimeter — except the
    doorway (on the west side), which simply has no band there, so walking
@@ -4768,11 +4899,18 @@ function wallBlocked(x,z,x0,x1,z0,z1,doorZC,doorHalf){
   }
   return false;
 }
-function blocked(x,z){
+/* ignoreTerrain: the shovel's own targeting passes this — otherwise digging
+   a pit past TERRAIN_WALK_LIMIT would immediately make blocked() reject
+   that exact spot, and you could never dig it any deeper */
+function blocked(x,z,ignoreTerrain){
   if(inBasement){
     return x<BASE.x-BASE_HX+0.3 || x>BASE.x+BASE_HX-0.3 || z<BASE.z-BASE_HZ+0.3 || z>BASE.z+BASE_HZ-0.3;
   }
   if(x<-26||x>26||z<-34||z>26) return true;
+  if(!ignoreTerrain){
+    var tc=terrainCol(x,z);
+    if(Math.abs(TERRAIN_H[tc[0]+','+tc[1]]||0) > TERRAIN_WALK_LIMIT) return true;
+  }
   var i;
   for(i=0;i<PUMPS.length;i++) if(Math.abs(x-PUMPS[i].x)<1.0 && Math.abs(z-PUMPS[i].z)<1.5) return true;
   if(wallBlocked(x,z, INT.x-ROOM_HX,INT.x+ROOM_HX, INT.z-ROOM_HZ,INT.z+ROOM_HZ, DOOR_CZ, DOOR_HALF)) return true;
@@ -5914,7 +6052,7 @@ function render(){
     drawRestroomSign();
     drawGull();
     drawBuyer();
-    drawDigHoles();
+    drawTerrainChunks();
     for(var mI=0;mI<CUSTOM_MODELS.length;mI++) drawCustomModel(CUSTOM_MODELS[mI]);
     for(var i=0;i<CARS.length;i++) drawCar(CARS[i]);
     drawStoreInterior();
@@ -5943,6 +6081,7 @@ function frame(now){
     walk(dt);
     updateAim();
     if(mouseDown && locked) holdUse(dt);
+    if(mouseDownR && locked && tool==='shovel') holdBuild(dt);
     updateCars(dt);
     updateCustomerWalk(dt);
     updateSpawn(dt);
