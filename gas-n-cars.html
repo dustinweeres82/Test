@@ -1499,10 +1499,20 @@ function carHotspots(c, out){
     p=P( 0.25,1.15,-1.7); out.push({ car:c, kind:'battery',  x:p[0],y:p[1],z:p[2], r:0.3 });
   }
   if(!c.custState){
-    p=P(-0.28,1.45,-1.05); out.push({ car:c, kind:'driver', x:p[0],y:p[1],z:p[2], r:0.6 });
+    var seatP=P(-0.28,0,-1.05);
+    p=P(-0.28,1.45,-1.05); out.push({ car:c, kind:'driver', x:p[0],y:p[1],z:p[2], r:0.6,
+      slotKey:'driver', px:seatP[0],py:1.1,pz:seatP[2],pyaw:c.yaw,pbase:1.0 });
     if(c.hat && c.hat.c){
       p=P(-0.28,1.62,-0.85); out.push({ car:c, kind:'hat', x:p[0],y:p[1],z:p[2], r:0.34 });
     }
+  }
+  /* a whole-hull hotspot, only when a custom car is actually wired in — the
+     stock car has no equivalent "hit the body" interaction, only its
+     specific named parts (cap/glass/wheel/...), which this coexists with
+     fine since aim already picks whichever hotspot is closest to centre */
+  if(CUSTOM_SLOTS.car){
+    out.push({ car:c, kind:'slotCar', slotKey:'car', x:c.x, y:0.7, z:c.z,
+      r:0.8*1.4*(CUSTOM_SLOTS.car.scale||1), px:c.x,py:0,pz:c.z,pyaw:c.yaw,pbase:1.4 });
   }
 }
 function allHotspots(){
@@ -1527,7 +1537,12 @@ function allHotspots(){
     var cm=CUSTOM_MODELS[i];
     out.push({ kind:'customModel', model:cm, x:cm.x, y:cm.y+0.6*cm.scale, z:cm.z, r:1.0*cm.scale });
   }
-  if(buyerHere) out.push({ kind:'buyer', x:BUYER_SPOT.x, y:1.3, z:BUYER_SPOT.z, r:0.6 });
+  if(CUSTOM_SLOTS.station){
+    out.push({ kind:'slotStation', slotKey:'station', x:SHOP.x, y:1.6, z:SHOP.z,
+      r:0.8*5.5*(CUSTOM_SLOTS.station.scale||1), px:SHOP.x,py:0,pz:SHOP.z,pyaw:0,pbase:5.5 });
+  }
+  if(buyerHere) out.push({ kind:'buyer', x:BUYER_SPOT.x, y:1.3, z:BUYER_SPOT.z, r:0.6,
+    slotKey:'buyer', px:BUYER_SPOT.x,py:0,pz:BUYER_SPOT.z,pyaw:0,pbase:1.0 });
   for(i=0;i<CARS.length;i++) if(CARS[i].state==='waiting') carHotspots(CARS[i], out);
   for(i=0;i<PUMPS.length;i++){
     var P=PUMPS[i];
@@ -1541,7 +1556,11 @@ function allHotspots(){
     var pl=POOP_PILES[i];
     out.push({ kind:'poop', pile:pl, x:pl.x, y:0.12, z:pl.z, r:0.5 });
   }
-  if(GULL.active) out.push({ kind:'gull', x:GULL.x, y:0.18, z:GULL.z, r:0.4 });
+  if(GULL.active){
+    var ghop=Math.max(0,Math.sin(gTime*3+GULL.seed))*0.05;
+    out.push({ kind:'gull', x:GULL.x, y:0.18, z:GULL.z, r:0.4,
+      slotKey:'gull', px:GULL.x,py:0.12+ghop,pz:GULL.z,pyaw:GULL.seed,pbase:1.0 });
+  }
   bgHotspots(out);
   return out;
 }
@@ -1562,11 +1581,34 @@ function updateAim(){
     if(score>bestScore){ bestScore=score; best=h; }
   }
   aim=best;
-  /* the customModel hotspot is just "roughly looking at this model" — for a
-     voxelized one, refine that into the exact cube under the crosshair */
-  if(aim && aim.kind==='customModel' && aim.model.voxelized && aim.model.voxelCells){
-    var ray=worldToVoxelRay(aim.model);
-    aim.voxel=raycastVoxels(aim.model.voxelCells, aim.model.voxelCellSize, ray.ro, ray.rd, ray.maxDist);
+  /* a voxel-destructible hotspot is just "roughly looking at this thing" —
+     resolve its actual model/placement/removal-callback, and for a
+     voxelized one, refine the coarse hit into the exact cube under the
+     crosshair. customModel already carries its model directly; every wired
+     slot kind (driver/gull/buyer/slotCar/slotStation) instead carries
+     slotKey plus the placement of THIS specific instance (px/py/pz/pyaw/
+     pbase, in the raw call-site units drawSlot() itself uses) since the
+     shared template has no position of its own. */
+  if(aim && aim.kind==='customModel'){
+    var mm0=aim.model;
+    aim.place={x:mm0.x,y:mm0.y,z:mm0.z,yaw:mm0.yaw,scale:mm0.scale};
+    aim.remove=function(){ var idx=CUSTOM_MODELS.indexOf(mm0); if(idx>=0) CUSTOM_MODELS.splice(idx,1); };
+    if(mm0.voxelized && mm0.voxelCells){
+      var ray=worldToVoxelRay(aim.place);
+      aim.voxel=raycastVoxels(mm0.voxelCells, mm0.voxelCellSize, ray.ro, ray.rd, ray.maxDist);
+    }
+  } else if(aim && aim.slotKey){
+    var sm0=CUSTOM_SLOTS[aim.slotKey];
+    if(sm0){
+      var sk0=aim.slotKey;
+      aim.model=sm0;
+      aim.place={x:aim.px,y:aim.py,z:aim.pz,yaw:(aim.pyaw||0)+(sm0.rot||0),scale:aim.pbase*(sm0.scale||1)};
+      aim.remove=function(){ delete CUSTOM_SLOTS[sk0]; };
+      if(sm0.voxelized && sm0.voxelCells){
+        var ray2=worldToVoxelRay(aim.place);
+        aim.voxel=raycastVoxels(sm0.voxelCells, sm0.voxelCellSize, ray2.ro, ray2.rd, ray2.maxDist);
+      }
+    }
   }
 }
 /* ── what does the held tool do to that hotspot? ─────────────────────────── */
@@ -1580,7 +1622,10 @@ function actionFor(h){
   if(h.kind==='restroom') return restroomBroken
     ? { t:'Take down the "Out of Order" sign' }
     : { t:'Hang a fake "Out of Order" sign', bad:true };
-  if(h.kind==='gull') return tool==='sponge' ? { t:'En garde', bad:true } : { t:'Shoo it away' };
+  if(h.kind==='gull'){
+    var vaGull=voxelDestructAction(h); if(vaGull) return vaGull;
+    return tool==='sponge' ? { t:'En garde', bad:true } : { t:'Shoo it away' };
+  }
   if(h.kind==='register'){
     var front=REG_LINE[0];
     if(!front) return { t:'No one in line right now' };
@@ -1590,16 +1635,11 @@ function actionFor(h){
   }
   if(h.kind==='oilCan') return heldOil ? null : { t:'Grab a quart of oil' };
   if(h.kind==='customModel'){
-    var mm=h.model;
-    if(mm.onFire){
-      if(tool==='fireext') return { t:'Hold to put it out', hold:true };
-      return { t:'It’s on fire — stand back' };
-    }
-    if(mm.voxelized && h.voxel){
-      if(tool==='crowbar') return { t:'Knock out that block', bad:true };
-      if(tool==='gun') return { t:'Shoot it out', bad:true };
-      if(tool==='lighter') return { t:'Set it alight', bad:true };
-    }
+    var va=voxelDestructAction(h); if(va) return va;
+    return { t:'Adjust it' };
+  }
+  if(h.kind==='slotStation' || h.kind==='slotCar'){
+    var vaSlot=voxelDestructAction(h); if(vaSlot) return vaSlot;
     return { t:'Adjust it' };
   }
   if(h.kind==='candyShelf') return { t:'Rearrange every shelf', bad:true };
@@ -1616,13 +1656,17 @@ function actionFor(h){
   }
   if(h.kind==='manager') return { t:'Hand out a sample' };
   if(h.kind==='ledger') return { t:'Open the books' };
-  if(h.kind==='buyer') return { t:'Sell the ready cases', bad:true };
+  if(h.kind==='buyer'){
+    var vaBuyer=voxelDestructAction(h); if(vaBuyer) return vaBuyer;
+    return { t:'Sell the ready cases', bad:true };
+  }
   var c=h.car; if(!c) return null;
   if(h.kind==='cap'){
     if(heldNozzle) return { t: c.capOpen ? 'Hold to pump fuel' : 'Open the cap first', hold:c.capOpen };
     return { t: c.capOpen ? 'Close the fuel cap' : 'Open the fuel cap' };
   }
   if(h.kind==='driver'){
+    var vaDriver=voxelDestructAction(h); if(vaDriver) return vaDriver;
     if(tool==='gun')     return { t:'Fire', bad:true };
     if(tool==='crowbar') return { t:'Swing the crowbar', bad:true };
     if(tool==='fireext') return { t:'Hold to spray the extinguisher', hold:true, bad:true };
@@ -1686,7 +1730,7 @@ function pressUse(){
   if(h.kind==='truck'){ openTruck(); return; }
   if(h.kind==='poop'){ pickUpPoop(h); return; }
   if(h.kind==='restroom'){ toggleRestroom(); return; }
-  if(h.kind==='gull'){ duelGull(); return; }
+  if(h.kind==='gull'){ if(voxelDestructPress(h)) return; duelGull(); return; }
   if(h.kind==='register'){ tapRegister(); return; }
   if(h.kind==='candyShelf'){ addChaos(2); toast(pick(['Every bag now two rows away from its label.',
       'Nothing is where it was.','A slow, deliberate act of chaos.'])); return; }
@@ -1700,23 +1744,22 @@ function pressUse(){
   if(h.kind==='station'){ tapStation(h.st); return; }
   if(h.kind==='manager'){ managerSample(); return; }
   if(h.kind==='ledger'){ openBasementUpgrades(); return; }
-  if(h.kind==='buyer'){ sellToBuyer(); return; }
+  if(h.kind==='buyer'){ if(voxelDestructPress(h)) return; sellToBuyer(); return; }
   if(h.kind==='oilCan'){ pickUpOil(); return; }
   if(h.kind==='customModel'){
-    var mm=h.model;
-    if(mm.onFire) return;   /* only the held-fireext action does anything while it's burning */
-    if(mm.voxelized && h.voxel){
-      if(tool==='crowbar'){ knockVoxel(mm, h.voxel, 1, 1); return; }
-      if(tool==='gun'){ knockVoxel(mm, h.voxel, 2, 4); return; }
-      if(tool==='lighter'){ igniteVoxels(mm, h.voxel); return; }
-    }
-    openModelAdjust(mm); return;
+    if(voxelDestructPress(h)) return;
+    openModelAdjust(h.model); return;
+  }
+  if(h.kind==='slotStation' || h.kind==='slotCar'){
+    if(voxelDestructPress(h)) return;
+    openSlotAdjust(h.slotKey, slotLabel(h.slotKey)); return;
   }
   var c=h.car;
   if(h.kind==='cap' && !heldNozzle){ c.capOpen=!c.capOpen; return; }
   if(h.kind==='hat'){ removeHat(c); return; }
   if(h.kind==='hood'){ toggleHood(c); return; }
   if(h.kind==='dipstick' && !heldOil){ checkDipstick(c); return; }
+  if(h.kind==='driver' && voxelDestructPress(h)){ return; }
   if(h.kind==='driver' && tool==='gun'){ shootDriver(c); return; }
   if(h.kind==='driver' && tool==='crowbar'){ bashDriver(c); return; }
   if(heldNozzle && (h.kind==='panelL'||h.kind==='panelR')){ nozzleWhip(c,h); return; }
@@ -1736,7 +1779,7 @@ function holdUse(dt){
   if(!h||!a||!a.hold){ if(pumping) stopPump(); return; }
   var c=h.car;
   if(h.kind==='cap' && heldNozzle && c.capOpen){ pumpFuel(c,dt); return; }
-  if(tool==='fireext' && h.kind==='customModel' && h.model.onFire){
+  if(tool==='fireext' && h.model && h.model.onFire){
     var mm=h.model;
     mm.extinguishT=(mm.extinguishT||0)+dt;
     if(mm.extinguishT>0.9){ mm.onFire=false; mm.extinguishT=0; toast('Fire’s out.'); }
@@ -2760,27 +2803,29 @@ function remeshVoxels(m){ m.tris=voxelsToTris(m.voxelCells, m.voxelCellSize); }
    through it one connected cube at a time. Everything downstream (the mesh,
    the "N triangles" readout, the hotspot's own radius) just reflects a
    smaller cell grid, so no separate "health" number is needed — the grid
-   itself IS the health. Scoped to loose dropped models only: wired slots
-   (station/car/driver/...) have no in-world hotspot of their own to aim at,
-   only the moment they're first wired. ──────────────────────────────────── */
-function voxelWorldPos(m, voxel){
-  var cs=m.voxelCellSize, lx=(voxel.cx+0.5)*cs, ly=(voxel.cy+0.5)*cs, lz=(voxel.cz+0.5)*cs;
-  var B=basis(m.yaw||0,0,0), o=[m.x, m.y||0, m.z], scale=m.scale||1;
+   itself IS the health. Applies to loose dropped models AND wired slots —
+   every voxel function below takes an explicit placement {x,y,z,yaw,scale}
+   rather than reading it off the model, since a wired slot (station/car/
+   driver/gull/buyer) doesn't carry its own position — the position comes
+   from wherever each drawSlot() call site currently puts it. ───────────── */
+function voxelWorldPos(place, cellSize, voxel){
+  var lx=(voxel.cx+0.5)*cellSize, ly=(voxel.cy+0.5)*cellSize, lz=(voxel.cz+0.5)*cellSize;
+  var B=basis(place.yaw||0,0,0), o=[place.x, place.y||0, place.z], scale=place.scale||1;
   return ptOf(B,o, lx*scale, ly*scale, lz*scale);
 }
 /* the reverse of drawModelTris's placement transform: turns the camera's
    position/facing into a ray in the model's own pre-scale voxel-grid units */
-function worldToVoxelRay(m){
-  var B=basis(m.yaw||0,0,0), o=[m.x, m.y||0, m.z], scale=m.scale||1;
+function worldToVoxelRay(place){
+  var B=basis(place.yaw||0,0,0), o=[place.x, place.y||0, place.z], scale=place.scale||1;
   var dx=camX-o[0], dy=camY-o[1], dz=camZ-o[2];
   var ro=[ (dx*B.r[0]+dy*B.r[1]+dz*B.r[2])/scale,
            (dx*B.u[0]+dy*B.u[1]+dz*B.u[2])/scale,
            (dx*B.f[0]+dy*B.f[1]+dz*B.f[2])/scale ];
   var rd=[ fx*B.r[0]+fy*B.r[1]+fz*B.r[2], fx*B.u[0]+fy*B.u[1]+fz*B.u[2], fx*B.f[0]+fy*B.f[1]+fz*B.f[2] ];
   var rl=Math.sqrt(rd[0]*rd[0]+rd[1]*rd[1]+rd[2]*rd[2])||1;
-  /* generous on purpose — the coarse customModel hotspot (which already
-     gated whether we get here at all) allows looking at a big model from
-     farther away than a tool's usual reach, scaled by its own radius */
+  /* generous on purpose — the coarse hotspot (which already gated whether we
+     get here at all) allows looking at a big model from farther away than a
+     tool's usual reach, scaled by its own radius */
   return { ro:ro, rd:[rd[0]/rl,rd[1]/rl,rd[2]/rl], maxDist:8/scale };
 }
 /* Amanatides & Woo fast voxel traversal: walk the ray cell by cell instead
@@ -2811,22 +2856,22 @@ function removeVoxelCell(m,cx,cy,cz){
   delete m.voxelCells[key];
   return true;
 }
-function destroyVoxelModel(m){
-  var idx=CUSTOM_MODELS.indexOf(m);
-  if(idx>=0){ CUSTOM_MODELS.splice(idx,1); toast('Nothing left of it.'); }
-}
 function voxelChipFX(wp, col){
   for(var i=0;i<5;i++) FX.push({ x:wp[0]+rnd(-0.05,0.05), y:wp[1]+rnd(-0.05,0.05), z:wp[2]+rnd(-0.05,0.05),
     vx:rnd(-0.6,0.6), vz:rnd(-0.6,0.6), vy:rnd(0.6,1.6), t:0, life:rnd(0.3,0.55), r:0.03+rnd(0,0.02), col:col });
 }
-function knockVoxel(m, voxel, radius, chaosAmt){
-  var removed=removeVoxelCell(m, voxel.cx, voxel.cy, voxel.cz), wp=voxelWorldPos(m, voxel);
+/* remove(): drops the model entirely (splice from CUSTOM_MODELS) for a loose
+   prop, or reverts a slot to its original look (delete CUSTOM_SLOTS[key])
+   for a wired one — the caller decides which, and supplies the matching
+   emptyMsg since "nothing left of it" reads differently for each */
+function knockVoxel(m, voxel, radius, chaosAmt, place, remove, emptyMsg){
+  var removed=removeVoxelCell(m, voxel.cx, voxel.cy, voxel.cz), wp=voxelWorldPos(place, m.voxelCellSize, voxel);
   if(removed) voxelChipFX(wp, m.col);
   if(radius>1){
     var nbrs=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
     for(var i=0;i<nbrs.length;i++){
       var nx=voxel.cx+nbrs[i][0], ny=voxel.cy+nbrs[i][1], nz=voxel.cz+nbrs[i][2];
-      if(removeVoxelCell(m,nx,ny,nz)){ removed=true; voxelChipFX(voxelWorldPos(m,{cx:nx,cy:ny,cz:nz}), m.col); }
+      if(removeVoxelCell(m,nx,ny,nz)){ removed=true; voxelChipFX(voxelWorldPos(place, m.voxelCellSize, {cx:nx,cy:ny,cz:nz}), m.col); }
     }
   }
   if(!removed) return;
@@ -2834,7 +2879,7 @@ function knockVoxel(m, voxel, radius, chaosAmt){
   addChaos(chaosAmt);
   toast(radius>1 ? pick(['Blasted a chunk out of it.','That left a hole.','Cubes everywhere.'])
                   : pick(['Knocked a block loose.','One cube down.','Chipped it right off.']));
-  if(!Object.keys(m.voxelCells).length) destroyVoxelModel(m);
+  if(!Object.keys(m.voxelCells).length){ toast(emptyMsg); remove(); }
 }
 /* full 26-neighbourhood, not just the 6 face-adjacent cells — voxelizeMesh
    only samples the SURFACE, so it's a thin shell rather than a solid block,
@@ -2858,25 +2903,104 @@ function igniteVoxels(m, voxel){
   voxelNeighborsInto(m.voxelCells, voxel.cx, voxel.cy, voxel.cz, m.fireSeen, m.fireFrontier);
   toast('It catches fast.'); addChaos(3);
 }
+/* place may be null (nothing currently anchors a wired slot's shared model
+   to a visible position — e.g. every car left the forecourt) — the fire
+   still ticks and spreads either way, it just skips the ember particles
+   for that tick since there's nowhere sensible to put them */
+function tickFire(m, dt, place, remove, emptyMsg){
+  m.fireTimer-=dt; if(m.fireTimer>0) return;
+  m.fireTimer=0.16;
+  var burns=Math.min(3, m.fireFrontier.length);
+  for(var b=0;b<burns;b++){
+    var key=m.fireFrontier.shift(); if(!key || !m.voxelCells[key]) continue;
+    var p=key.split(','), cx=+p[0], cy=+p[1], cz=+p[2];
+    delete m.voxelCells[key];
+    if(place){
+      var wp=voxelWorldPos(place, m.voxelCellSize, {cx:cx,cy:cy,cz:cz});
+      for(var f=0;f<3;f++) FX.push({ x:wp[0]+rnd(-0.06,0.06), y:wp[1]+rnd(0,0.1), z:wp[2]+rnd(-0.06,0.06),
+        vy:rnd(0.5,1.1), t:0, life:rnd(0.35,0.6), r:0.05+rnd(0,0.03), col:[255,90+((rnd(0,80))|0),40] });
+    }
+    voxelNeighborsInto(m.voxelCells, cx, cy, cz, m.fireSeen, m.fireFrontier);
+  }
+  remeshVoxels(m);
+  if(!Object.keys(m.voxelCells).length){ m.onFire=false; toast(emptyMsg); remove(); }
+  else if(!m.fireFrontier.length){ m.onFire=false; toast('The fire burns itself out.'); }
+}
+function slotLabel(key){
+  for(var i=0;i<SLOT_DEFS.length;i++) if(SLOT_DEFS[i].key===key) return SLOT_DEFS[i].label;
+  return 'It';
+}
+/* best-effort "where is this slot's shared model actually visible right
+   now" — used only to anchor fire's ember particles, since fire ticks every
+   frame regardless of whether the player is currently looking at anything.
+   Mirrors each drawSlot() call site's own placement math exactly. */
+function slotPlacement(key){
+  var m=CUSTOM_SLOTS[key]; if(!m) return null;
+  if(key==='station') return { x:SHOP.x, y:0, z:SHOP.z, yaw:(m.rot||0), scale:5.5*(m.scale||1) };
+  if(key==='gull'){
+    if(!GULL.active) return null;
+    var hop=Math.max(0,Math.sin(gTime*3+GULL.seed))*0.05;
+    return { x:GULL.x, y:0.12+hop, z:GULL.z, yaw:GULL.seed+(m.rot||0), scale:1.0*(m.scale||1) };
+  }
+  if(key==='buyer') return buyerHere ? { x:BUYER_SPOT.x, y:0, z:BUYER_SPOT.z, yaw:(m.rot||0), scale:1.0*(m.scale||1) } : null;
+  if(key==='car'){
+    for(var i=0;i<CARS.length;i++) if(CARS[i].state==='waiting')
+      return { x:CARS[i].x, y:0, z:CARS[i].z, yaw:CARS[i].yaw+(m.rot||0), scale:1.4*(m.scale||1) };
+    return null;
+  }
+  if(key==='driver'){
+    for(var i=0;i<CARS.length;i++){
+      var c=CARS[i];
+      if(c.state==='waiting' && !c.custState){
+        var B=basis(c.yaw,0,0), seatP=ptOf(B,[c.x,0,c.z],-0.28,0,-1.05);
+        return { x:seatP[0], y:1.1, z:seatP[2], yaw:c.yaw+(m.rot||0), scale:1.0*(m.scale||1) };
+      }
+    }
+    return null;
+  }
+  return null;
+}
 function updateVoxelFire(dt){
   for(var mi=0;mi<CUSTOM_MODELS.length;mi++){
     var m=CUSTOM_MODELS[mi]; if(!m.onFire) continue;
-    m.fireTimer-=dt; if(m.fireTimer>0) continue;
-    m.fireTimer=0.16;
-    var burns=Math.min(3, m.fireFrontier.length);
-    for(var b=0;b<burns;b++){
-      var key=m.fireFrontier.shift(); if(!key || !m.voxelCells[key]) continue;
-      delete m.voxelCells[key];
-      var p=key.split(','), cx=+p[0], cy=+p[1], cz=+p[2];
-      var wp=voxelWorldPos(m,{cx:cx,cy:cy,cz:cz});
-      for(var f=0;f<3;f++) FX.push({ x:wp[0]+rnd(-0.06,0.06), y:wp[1]+rnd(0,0.1), z:wp[2]+rnd(-0.06,0.06),
-        vy:rnd(0.5,1.1), t:0, life:rnd(0.35,0.6), r:0.05+rnd(0,0.03), col:[255,90+((rnd(0,80))|0),40] });
-      voxelNeighborsInto(m.voxelCells, cx, cy, cz, m.fireSeen, m.fireFrontier);
-    }
-    remeshVoxels(m);
-    if(!Object.keys(m.voxelCells).length){ CUSTOM_MODELS.splice(mi,1); mi--; toast('Burned to nothing.'); }
-    else if(!m.fireFrontier.length){ m.onFire=false; toast('The fire burns itself out.'); }
+    tickFire(m, dt, {x:m.x,y:m.y,z:m.z,yaw:m.yaw,scale:m.scale||1}, function(){
+      var idx=CUSTOM_MODELS.indexOf(m); if(idx>=0){ CUSTOM_MODELS.splice(idx,1); mi--; }
+    }, 'Burned to nothing.');
   }
+  var keys=Object.keys(CUSTOM_SLOTS);
+  for(var si=0;si<keys.length;si++){
+    var key=keys[si], sm=CUSTOM_SLOTS[key]; if(!sm || !sm.onFire) continue;
+    tickFire(sm, dt, slotPlacement(key), function(){ delete CUSTOM_SLOTS[key]; },
+      slotLabel(key)+' burned to nothing. Back to normal.');
+  }
+}
+/* shared by every voxel-destructible hotspot kind — customModel (h.model set
+   directly) and every wired-slot kind (h.model resolved by updateAim from
+   h.slotKey). Returns null when nothing destructive applies right now, so
+   the caller falls through to that hotspot's own default behaviour. */
+function voxelDestructAction(h){
+  var m=h.model; if(!m) return null;
+  if(m.onFire){
+    if(tool==='fireext') return { t:'Hold to put it out', hold:true };
+    return { t:'It’s on fire — stand back' };
+  }
+  if(m.voxelized && h.voxel){
+    if(tool==='crowbar') return { t:'Knock out that block', bad:true };
+    if(tool==='gun') return { t:'Shoot it out', bad:true };
+    if(tool==='lighter') return { t:'Set it alight', bad:true };
+  }
+  return null;
+}
+function voxelDestructPress(h){
+  var m=h.model; if(!m) return false;
+  if(m.onFire) return true;   /* consumed: only the held-fireext action does anything while it burns */
+  if(m.voxelized && h.voxel){
+    var emptyMsg=h.slotKey ? (slotLabel(h.slotKey)+' — nothing left of it. Back to normal.') : 'Nothing left of it.';
+    if(tool==='crowbar'){ knockVoxel(m, h.voxel, 1, 1, h.place, h.remove, emptyMsg); return true; }
+    if(tool==='gun'){ knockVoxel(m, h.voxel, 2, 4, h.place, h.remove, emptyMsg); return true; }
+    if(tool==='lighter'){ igniteVoxels(m, h.voxel); return true; }
+  }
+  return false;
 }
 function importModelAt(tris, x, z, yaw, col, rig){
   var m={ tris:tris, x:x, y:0, z:z, yaw:yaw, scale:1, col:col };
