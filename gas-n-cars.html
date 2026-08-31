@@ -81,6 +81,10 @@
              background:var(--ink); color:#fff; font-size:11px; font-family:'Baloo 2'; font-weight:700;
              display:flex; align-items:center; justify-content:center; }
 
+  #hurtFlash { position:fixed; inset:0; background:radial-gradient(ellipse at center,
+               rgba(200,20,20,0.05) 40%, rgba(160,10,10,0.85) 100%);
+               opacity:0; pointer-events:none; z-index:50; }
+
   /* toast / review popups */
   #toast { top:22%; left:50%; transform:translateX(-50%); padding:12px 22px; font-family:'Baloo 2';
            font-weight:700; font-size:18px; opacity:0; transition:opacity .25s; white-space:nowrap; }
@@ -154,6 +158,7 @@
 <body>
 <canvas id="c"></canvas>
 <canvas id="ov"></canvas>
+<div id="hurtFlash"></div>
 
 <div id="hud">
   <div id="wallet" class="card"><span id="cash">$0</span>
@@ -827,10 +832,13 @@ var BODY_COLS = [
   { n:'purple', c:[142,96,190] }, { n:'orange', c:[238,140,54] }
 ];
 var HAT_COLS = [
-  { n:'a green cap',  c:[96,214,110] }, { n:'a red cap',    c:[224,80,66] },
-  { n:'a blue cap',   c:[76,138,220] }, { n:'a straw hat',  c:[226,198,120] },
-  { n:'no hat',       c:null }
+  { n:'a green cap',   c:[96,214,110] },  { n:'a red cap',     c:[224,80,66] },
+  { n:'a blue cap',    c:[76,138,220] },  { n:'a straw hat',   c:[226,198,120] },
+  { n:'a cowboy hat',  c:[176,124,70] },  { n:'a pink wig',    c:[244,120,196] },
+  { n:'a rainbow wig', c:[210,90,220] },  { n:'a mullet wig',  c:[196,150,60] },
+  { n:'no hat',        c:null }
 ];
+var HAT_NONE = HAT_COLS[HAT_COLS.length-1];
 var FIRST=['Dorothy','Hank','Marge','Cletus','Wanda','Duane','Roberta','Elmer','Peggy','Buford',
            'Lurleen','Otis','Ramona','Virgil','Nadine','Cy','Bonnie','Rufus'];
 var LAST=['Peck','Gulch','Hobbs','Sizemore','Tuttle','Cassidy','Dent','Pike','Marlow','Fuchs'];
@@ -852,6 +860,7 @@ function newCar(){
     glass: 1, painted:false, soaked:0, onFire:0, burned:0,
     tipped:0, served:false, mood:1, angry:0, fugitive:false,
     seed:(Math.random()*1e6)|0, bob:Math.random()*TAU, wheelSpin:0,
+    temper: Math.random(), armed: Math.random()<0.18, atkCd: rnd(1.4,3.0), dazeT:0,
     plate: String.fromCharCode(65+(Math.random()*26|0), 65+(Math.random()*26|0)) +
            '-' + (100+(Math.random()*899|0))
   };
@@ -1289,6 +1298,12 @@ function updateCars(dt){
       if(c.onFire<=0 && c.state==='waiting'){ finishCar(c, true); }
     }
     if(c.angry>0) c.angry-=dt*0.5;
+    if(c.dazeT>0) c.dazeT-=dt;
+    /* volatile, furious, and waiting: some of them will take a swing */
+    if(c.state==='waiting' && !c.served && c.angry>0.85 && c.mood<0.15 && c.temper>0.55){
+      c.atkCd-=dt;
+      if(c.atkCd<=0){ attemptAttack(c); c.atkCd=rnd(2.6,4.4); }
+    }
     if(c.state==='arriving'){
       drivePath(c, dt, function(){
         var W=c.path[c.path.length-1];
@@ -1322,7 +1337,13 @@ var TOOLS = [
     d:'A can of paint. Respray a panel. Any panel. Any colour.' },
   { id:'lighter',key:'6', name:'LIGHTER',g:'&#128293;', owned:false, price:260,
     d:'For lighting things. Fuel is a thing. Think it through.' },
-  { id:'bat',    key:'7', name:'BAT',    g:'&#9918;',    owned:false, price:0, hidden:true,
+  { id:'crowbar',key:'7', name:'CROWBAR',g:'&#9874;',   owned:false, price:90,
+    d:'Blunt, heavy, and it makes people very cross with you.' },
+  { id:'gun',    key:'8', name:'GUN',    g:'&#128299;', owned:false, price:340,
+    d:'Ends the conversation. Ends the review too.' },
+  { id:'fireext',key:'9', name:'FIRE EXT',g:'&#129519;', owned:false, price:140,
+    d:'Puts out cars. Also works on people, if you are that sort.' },
+  { id:'bat',    key:'0', name:'BAT',    g:'&#9918;',    owned:false, price:0, hidden:true,
     d:'Buford\u2019s bat. Swing with the mouse. G puts it down.' }
 ];
 var tool = 'hands', heldNozzle = null, holster = false;
@@ -1343,6 +1364,9 @@ function carHotspots(c, out){
   p=P(0,0.56,-2.06);     out.push({ car:c, kind:'plate',  x:p[0],y:p[1],z:p[2], r:0.3 });
   p=P(0,1.34,-1.13);     out.push({ car:c, kind:'glass',  x:p[0],y:p[1],z:p[2], r:0.55 });
   p=P(-0.28,1.45,-1.05); out.push({ car:c, kind:'driver', x:p[0],y:p[1],z:p[2], r:0.6 });
+  if(c.hat && c.hat.c){
+    p=P(-0.28,1.62,-0.85); out.push({ car:c, kind:'hat', x:p[0],y:p[1],z:p[2], r:0.34 });
+  }
 }
 function allHotspots(){
   var out=[], i;
@@ -1388,12 +1412,17 @@ function actionFor(h){
     return { t: c.capOpen ? 'Close the fuel cap' : 'Open the fuel cap' };
   }
   if(h.kind==='driver'){
+    if(tool==='gun')     return { t:'Fire', bad:true };
+    if(tool==='crowbar') return { t:'Swing the crowbar', bad:true };
+    if(tool==='fireext') return { t:'Hold to spray the extinguisher', hold:true, bad:true };
     if(c.served) return { t:'Take the payment' };
     if(tool==='spray') return { t:'Hold to spray the driver', hold:true, bad:true };
     if(heldNozzle) return { t:'Hold to hose the driver down', hold:true, bad:true };
     return { t:'“'+driverLine(c)+'”' };
   }
+  if(h.kind==='hat') return { t:'Snatch '+c.hatName };
   if(h.kind==='panelL'||h.kind==='panelR'||h.kind==='front'||h.kind==='glass'){
+    if(tool==='fireext' && c.onFire>0) return { t:'Hold to put the fire out', hold:true };
     if(tool==='sponge' && c.dirt>0.02) return { t:'Hold to scrub', hold:true };
     if(tool==='spray')  return { t:'Hold to respray', hold:true, bad:true };
     if(tool==='wrench' && h.kind==='glass' && c.glass>0.5) return { t:'Break the window', bad:true };
@@ -1441,6 +1470,9 @@ function pressUse(){
   if(h.kind==='truck'){ openTruck(); return; }
   var c=h.car;
   if(h.kind==='cap' && !heldNozzle){ c.capOpen=!c.capOpen; return; }
+  if(h.kind==='hat'){ removeHat(c); return; }
+  if(h.kind==='driver' && tool==='gun'){ shootDriver(c); return; }
+  if(h.kind==='driver' && tool==='crowbar'){ bashDriver(c); return; }
   if(h.kind==='driver' && c.served){ collect(c); return; }
   if(tool==='wrench' && h.kind==='glass' && c.glass>0.5){ breakGlass(c); return; }
   if(tool==='lighter' && c.soaked>0.2 && c.onFire<=0){ ignite(c); return; }
@@ -1459,6 +1491,8 @@ function holdUse(dt){
   var c=h.car;
   if(h.kind==='cap' && heldNozzle && c.capOpen){ pumpFuel(c,dt); return; }
   if(pumping) stopPump();
+  if(tool==='fireext' && h.kind==='driver'){ foamDriver(c,dt); return; }
+  if(tool==='fireext' && c.onFire>0){ extinguish(c,dt); return; }
   if(heldNozzle && (h.kind!=='cap')){ sprayFuel(c,h,dt); return; }
   if(tool==='sponge' && c.dirt>0){ scrub(c,dt); return; }
   if(tool==='spray'){ sprayPaint(c,h,dt); return; }
@@ -1488,8 +1522,17 @@ function sprayFuel(c,h,dt){
   c.soaked = Math.min(1, c.soaked + dt*0.8);
   c.angry = 1; c.mood = Math.max(0, c.mood - dt*0.5);
   spawnSpill(h.x, h.z);
-  if(h.kind==='driver'){ c.mood=0; c.soakedDriver=true; }
+  if(h.kind==='driver'){ c.mood=0; c.soakedDriver=true; maybeBarf(c); }
   fxSpurt(c);
+}
+/* the first faceful of anything wet is where they lose their lunch */
+function maybeBarf(c){
+  if(c.barfed || c.soaked<0.30) return;
+  c.barfed=true; c.angry=1; c.mood=0; chaosScore+=2;
+  for(var i=0;i<9;i++) FX.push({ x:c.x+rnd(-0.35,0.35), y:1.25+rnd(-0.08,0.16), z:c.z-0.85+rnd(-0.2,0.2),
+      vy:rnd(0.3,0.9), t:0, life:0.5, r:0.045, col:[164,196,80] });
+  spawnSpill(c.x-0.2, c.z-1.1);
+  toast(c.name+' throws up. That is going in the review.');
 }
 function scrub(c,dt){
   c.dirt = Math.max(0, c.dirt - dt*0.55);
@@ -1527,6 +1570,65 @@ function breakGlass(c){
   for(var i=0;i<16;i++) FX.push({ x:c.x+rnd(-0.5,0.5), y:1.3+rnd(-0.2,0.3), z:c.z+rnd(-1.4,1.0),
     vy:rnd(0.5,2), t:0, life:0.9, r:0.04, col:[196,230,240] });
   toast('Window smashed.');
+}
+/* ── the arsenal ────────────────────────────────────────────────────────── */
+function shootDriver(c){
+  c.mood=0; c.angry=1; chaosScore+=6;
+  ratings.push(1); showReview(c,1,['got shot, if you can believe that'],0);
+  for(var i=0;i<10;i++) FX.push({ x:c.x+rnd(-0.4,0.4), y:1.2+rnd(-0.1,0.3), z:c.z-0.8+rnd(-0.3,0.3),
+      vy:rnd(0.3,1.1), t:0, life:0.5, r:0.045, col:[214,52,46] });
+  toast(c.name+' goes down. That is a felony, probably.');
+  finishCar(c, true);
+}
+function bashDriver(c){
+  /* a crowbar leaves them standing — and furious, so unlike the gun, this
+     one can earn you a punch back */
+  c.mood=Math.max(0,c.mood-0.6); c.angry=1; c.dazeT=1.6; chaosScore+=3;
+  ratings.push(2);
+  toast('You crack '+c.name+' with the crowbar.');
+  for(var i=0;i<8;i++) FX.push({ x:c.x+rnd(-0.3,0.3), y:1.3+rnd(-0.1,0.2), z:c.z-0.8+rnd(-0.2,0.2),
+      vy:rnd(0.4,1.0), t:0, life:0.4, r:0.04, col:[255,214,120] });
+}
+function extinguish(c,dt){
+  c.onFire=Math.max(0,c.onFire-dt*3.2);
+  for(var i=0;i<2;i++) FX.push({ x:aim.x+rnd(-0.3,0.3), y:aim.y+rnd(-0.1,0.3), z:aim.z+rnd(-0.3,0.3),
+      vy:rnd(0.5,1.1), t:0, life:0.4, r:0.06, col:[240,240,236], kind:'smoke' });
+  if(c.onFire<=0 && c.burned>0) toast('Fire is out.');
+}
+function foamDriver(c,dt){
+  c.soaked=Math.min(1,c.soaked+dt*0.7); c.angry=1; c.mood=Math.max(0,c.mood-dt*0.5);
+  spawnSpill(aim.x,aim.z);
+  FX.push({ x:aim.x, y:aim.y, z:aim.z, vy:rnd(0.4,0.9), t:0, life:0.3, r:0.05, col:[248,248,248] });
+  maybeBarf(c);
+}
+function removeHat(c){
+  var was=c.hatName;
+  c.hat=HAT_NONE; c.hatName=HAT_NONE.n;
+  c.mood=Math.max(0,c.mood-0.2); c.angry=Math.max(c.angry,0.4);
+  partsBin+=20;
+  toast('Snatched '+was+' right off their head  +$20 at the truck');
+}
+/* ── the ones who hit back ─────────────────────────────────────────────── */
+var camKickT=0, camKickMag=0, camKickDur=1, PLAYER_FLASH=0;
+function hurtFlash(a){ PLAYER_FLASH=Math.max(PLAYER_FLASH,a); }
+function camKick(dur,mag){ camKickT=dur; camKickDur=dur; camKickMag=mag; }
+function punchPlayer(c){
+  var dmg=Math.round(rnd(8,16)); cash=Math.max(0,cash-dmg); syncHUD();
+  hurtFlash(0.5); camKick(0.20,0.032);
+  toast(c.name+' punches you.  -$'+dmg);
+}
+function shootPlayer(c){
+  var dmg=Math.round(rnd(14,26)); cash=Math.max(0,cash-dmg); syncHUD();
+  hurtFlash(0.75); camKick(0.32,0.058);
+  toast(c.name+' takes a shot at you.  -$'+dmg);
+  for(var i=0;i<3;i++) FX.push({ x:c.x+rnd(-0.15,0.15), y:1.3, z:c.z-0.85,
+      vy:0.15, t:0, life:0.12, r:0.05, col:[255,230,120], kind:'fire' });
+}
+function attemptAttack(c){
+  var dx=camX-c.x, dz=camZ-c.z, d=Math.sqrt(dx*dx+dz*dz);
+  if(d>10) return;
+  if(d<2.4) punchPlayer(c);
+  else if(c.armed && d<9.5) shootPlayer(c);
 }
 function ignite(c){
   c.onFire=4.5; c.mood=0; c.angry=1;
@@ -1615,6 +1717,21 @@ function drawHeld(){
     pose = FIST;
     hx = 0.270+sway; hy = -0.252+bob+idle; hz = 0.555 + jab*0.07;
     grip=1; hyaw = 1.212+idle2*0.05; hrol = -0.547; hpit = 3.74 + osc*0.50 + jab*0.30;
+  } else if(tool==='crowbar'){                          /* ── one fist, an overhead crack ── */
+    pose = FIST;
+    var cs = swingT>0 ? 1-swingT/0.40 : 0;
+    var csw = swingT>0 ? Math.sin(cs*PI) : 0;
+    hx = 0.300+sway; hy = -0.256+bob+idle + csw*0.10; hz = 0.540 + csw*0.10;
+    grip=1; hyaw = 1.05+idle2*0.05; hrol = -0.42 - csw*0.9; hpit = 3.55 + csw*0.9;
+  } else if(tool==='gun'){                              /* ── pistol, one hand ── */
+    pose = [0.20,1.18,1.22,1.18, 1.05, -0.12, 0.0];
+    pose[0] = 0.20 + 0.78*jab;
+    hx = 0.270+sway; hy = -0.198+bob+idle - jab*0.02; hz = 0.520 + jab*0.05;
+    hyaw = -0.48+idle2*0.10; hpit = 0.42; hrol = -1.02;
+  } else if(tool==='fireext'){                          /* ── canister on the off arm ── */
+    pose = FIST;
+    hx = 0.290+sway; hy = -0.238+bob+idle - pump*0.012; hz = 0.548 + pump*0.02;
+    grip=1; hyaw = 1.10+idle2*0.05; hrol = -0.30; hpit = 3.62;
   } else if(tool==='spray'){                           /* ── can, thumb up ── */
     pose = [1.05,1.12,1.14,1.10, 0.30+Math.max(pump,jab)*0.85, -0.55, 0.0];
     hx = 0.246+sway; hy = -0.216+bob+idle - Math.max(pump,jab)*0.016;
@@ -2579,6 +2696,10 @@ function updateHUD(dt){
        (bgHasBat() ? '<br>LMB swing &middot; G drop bat' : '<br>press 7 for the bat'));
     document.getElementById('ballMsg').textContent = BGM.msgT>0 ? BGM.msg : '';
   }
+  if(PLAYER_FLASH>0){
+    PLAYER_FLASH=Math.max(0,PLAYER_FLASH-dt*1.8);
+    document.getElementById('hurtFlash').style.opacity=(PLAYER_FLASH*0.6).toFixed(2);
+  }
   hudT-=dt;
   if(hudT<=0){ hudT=0.2; syncHUD(); syncOrder(); }
 }
@@ -3328,6 +3449,31 @@ function hndTool(Bh,oH, jab, osc, pump){
     meshPrismB(Bh,oH, -0.118*S,GY,GZ, 0.029*S, 0.186*S, 5,'x', st, null, 1.0);   /* shaft */
     drawBox(Bh,oH, -0.322*S,GY+0.014*S,GZ, 0.044*S,0.082*S,0.034*S, st2);        /* head  */
     drawBox(Bh,oH, -0.394*S,GY+0.078*S,GZ, 0.048*S,0.028*S,0.032*S, st2);        /* jaw   */
+  } else if(tool==='crowbar'){
+    var cb=[168,64,54], cbd=[130,46,40];
+    meshPrismB(Bh,oH, -0.150*S,GY,GZ, 0.020*S, 0.230*S, 5,'x', cb, null, 1.0);   /* shaft */
+    meshPrismB(Bh,oH, -0.390*S,GY-0.012*S,GZ, 0.020*S, 0.070*S, 5,'x', cbd, cbd, 1.0); /* curl */
+    drawBox(Bh,oH, 0.088*S,GY+0.006*S,GZ, 0.020*S,0.020*S,0.052*S, cbd);         /* flat claw */
+  } else if(tool==='gun'){
+    /* nearly twice the earlier size and a brighter chrome — buried in the fist
+       and dark grey, the first version read as a dark lump, not a gun */
+    var gm=[104,108,120], gm2=[52,54,64], gr=[230,232,238];
+    drawBox(Bh,oH, 0,GY+0.006*S,GZ+0.070*S, 0.040*S,0.076*S,0.096*S, gm);         /* slide  */
+    drawBox(Bh,oH, 0,GY-0.076*S,GZ+0.008*S, 0.034*S,0.070*S,0.038*S, gm2);        /* grip   */
+    drawBox(Bh,oH, 0,GY+0.014*S,GZ+0.150*S, 0.026*S,0.028*S,0.050*S, gm);         /* barrel */
+    drawBox(Bh,oH, 0,GY+0.036*S,GZ+0.022*S, 0.009*S,0.016*S,0.028*S, gr);         /* sight  */
+    if(jab>0.55) FX.push({ x:ptOf(Bh,oH,0,GY+0.020*S,GZ+0.192*S)[0],
+      y:ptOf(Bh,oH,0,GY+0.020*S,GZ+0.192*S)[1], z:ptOf(Bh,oH,0,GY+0.020*S,GZ+0.192*S)[2],
+      vy:0.2, t:0, life:0.09, r:0.045, col:[255,236,150], kind:'fire' });
+  } else if(tool==='fireext'){
+    var fe=[196,40,40], fed=[150,28,28], fs=[210,214,220];
+    meshPrismB(Bh,oH, -0.070*S,GY,GZ, 0.052*S, 0.140*S, 8,'x', fe, fed, 0.96);    /* tank   */
+    drawBox(Bh,oH, -0.190*S,GY+0.036*S,GZ, 0.026*S,0.026*S,0.026*S, [70,72,80]);  /* valve  */
+    meshPrismB(Bh,oH, -0.240*S,GY+0.048*S,GZ+0.030*S, 0.012*S, 0.060*S, 6,'z', fs, fs, 0.9); /* hose */
+    if(hndHold>0.05){
+      var hp=ptOf(Bh,oH, -0.290*S,GY+0.048*S,GZ+0.088*S);
+      FX.push({ x:hp[0], y:hp[1], z:hp[2], vy:0.4, t:0, life:0.28, r:0.05, col:[244,244,240] });
+    }
   } else if(tool==='spray'){
     /* the hand is rolled +90°, so local x points up — the can stands in the fist */
     var CY=GY-0.006*S;
@@ -3555,6 +3701,14 @@ function hndBubble(g, X, Y, R, ico, col, alpha, pop){
   g.globalAlpha = 1;
 }
 function render(){
+  /* a visual-only jolt: applied to the basis for this frame's draw, then put
+     back, so it never touches the aim the player is actually holding */
+  var _cy=camYaw, _cp=camPitch;
+  if(camKickT>0){
+    var kk=camKickT/camKickDur;
+    camYaw += Math.sin(gTime*53)*camKickMag*kk;
+    camPitch += Math.cos(gTime*67)*camKickMag*0.6*kk;
+  }
   setCamBasis();
   drawSky();
   drawClouds();
@@ -3574,6 +3728,7 @@ function render(){
   flush();
   if(vignette){ ctx.fillStyle=vignette; ctx.fillRect(0,0,W,H); }
   drawWorldLabels();
+  camYaw=_cy; camPitch=_cp;                        /* shake was visual only */
 }
 var last=0, titleUp=true;
 function frame(now){
@@ -3601,6 +3756,7 @@ function frame(now){
     clockT+=dt;
     if(clockT>DAY_LEN) endDay();
   }
+  if(camKickT>0) camKickT=Math.max(0,camKickT-dt);
   render();
   updateHUD(dt);
 }
