@@ -1498,6 +1498,7 @@ function allHotspots(){
     var pl=POOP_PILES[i];
     out.push({ kind:'poop', pile:pl, x:pl.x, y:0.12, z:pl.z, r:0.5 });
   }
+  if(GULL.active) out.push({ kind:'gull', x:GULL.x, y:0.18, z:GULL.z, r:0.4 });
   bgHotspots(out);
   return out;
 }
@@ -1530,6 +1531,7 @@ function actionFor(h){
   if(h.kind==='restroom') return restroomBroken
     ? { t:'Take down the "Out of Order" sign' }
     : { t:'Hang a fake "Out of Order" sign', bad:true };
+  if(h.kind==='gull') return tool==='sponge' ? { t:'En garde', bad:true } : { t:'Shoo it away' };
   var c=h.car; if(!c) return null;
   if(h.kind==='cap'){
     if(heldNozzle) return { t: c.capOpen ? 'Hold to pump fuel' : 'Open the cap first', hold:c.capOpen };
@@ -1597,6 +1599,7 @@ function pressUse(){
   if(h.kind==='truck'){ openTruck(); return; }
   if(h.kind==='poop'){ pickUpPoop(h); return; }
   if(h.kind==='restroom'){ toggleRestroom(); return; }
+  if(h.kind==='gull'){ duelGull(); return; }
   var c=h.car;
   if(h.kind==='cap' && !heldNozzle){ c.capOpen=!c.capOpen; return; }
   if(h.kind==='hat'){ removeHat(c); return; }
@@ -1845,6 +1848,36 @@ function drawRestroomSign(){
   drawBox(B,o, 0,1.38,0, 0.02,0.16,0.24, [244,240,230], null);
   var col = restroomBroken ? [214,58,48] : [90,150,90];
   drawBox(B,o, 0.028,1.38,0, 0.006,0.11,0.17, col, null);
+}
+/* ── squeegee vs. seagull ─────────────────────────────────────────────────── */
+var GULL={ active:false, x:0, z:0, seed:0, t:0 }, gullTimer=rnd(15,25);
+function spawnGull(){
+  if(GULL.active) return;
+  for(var tries=0;tries<12;tries++){
+    var x=rnd(-20,20), z=rnd(-28,20);
+    if(blocked(x,z)) continue;
+    GULL.active=true; GULL.x=x; GULL.z=z; GULL.seed=Math.random()*TAU; GULL.t=0;
+    return;
+  }
+}
+function duelGull(){
+  GULL.active=false;
+  if(tool==='sponge'){
+    addChaos(1);
+    toast(pick(['Squeegee-fu prevails.','It never stood a chance.','Round one to the human.']));
+  } else {
+    toast('It waddles off, unimpressed.');
+  }
+}
+function drawGull(){
+  if(!GULL.active) return;
+  var hop=Math.max(0,Math.sin(gTime*3+GULL.seed))*0.05;
+  var B=basis(GULL.seed,0,0), o=[GULL.x,0.12+hop,GULL.z];
+  meshBlobB(B,o, 0,0,0, 0.11,0.09,0.16,(GULL.seed*1000)|0,[240,240,238],0.7,0.10);   /* body */
+  meshBlobB(B,o, 0,0.05,-0.15, 0.07,0.06,0.07,(GULL.seed*1000+3)|0,[236,236,232],0.7,0.10); /* head */
+  meshBlobB(B,o, 0,0.03,-0.22, 0.025,0.02,0.05,(GULL.seed*1000+5)|0,[240,170,60],0.6,0.10); /* beak */
+  meshBlobB(B,o, 0.10,0.02,0.02, 0.09,0.03,0.14,(GULL.seed*1000+7)|0,[178,182,190],0.7,0.10); /* wing */
+  meshBlobB(B,o,-0.10,0.02,0.02, 0.09,0.03,0.14,(GULL.seed*1000+9)|0,[178,182,190],0.7,0.10); /* wing */
 }
 function drawPoop(){
   for(var i=0;i<POOP_PILES.length;i++){
@@ -4016,6 +4049,7 @@ function render(){
   drawTruck();
   drawPoop();
   drawRestroomSign();
+  drawGull();
   for(var i=0;i<CARS.length;i++) drawCar(CARS[i]);
   drawBallGuy();
   drawBallProps();
@@ -4051,6 +4085,7 @@ function frame(now){
     sheriffBtnHot = !!sheriffCase;
     if(chaosScore>0) chaosScore=Math.max(0,chaosScore-dt*0.6);
     poopTimer-=dt; if(poopTimer<=0){ spawnPoopPile(); poopTimer=rnd(18,30); }
+    gullTimer-=dt; if(gullTimer<=0){ spawnGull(); gullTimer=rnd(20,35); }
     clockT+=dt;
     if(clockT>DAY_LEN) endDay();
   }
