@@ -2352,6 +2352,85 @@ function drawModelTris(tris, col, x, y, z, yaw, scale, refY){
 function drawCustomModel(m){
   drawModelTris(m.tris, m.col, m.x, m.y, m.z, m.yaw, m.scale);
 }
+/* ── voxelize: sample the mesh's surface onto a grid, then re-emit only the
+   cube faces that actually border empty space. A face between two solid
+   cells is invisible either way, so skipping it is free triangle savings —
+   this is the one optimization step that keeps a few thousand triangles
+   from turning into tens of thousands of wasted ones. Not full greedy
+   meshing (adjacent same-size quads aren't merged further), but it is what
+   keeps this a one-frame synchronous operation instead of needing a proper
+   mesher. */
+function voxelizeMesh(tris, cellSize){
+  var cells={};
+  for(var i=0;i<tris.length;i++){
+    var t=tris[i];
+    var ax=t[0],ay=t[1],az=t[2];
+    var e1x=t[3]-ax,e1y=t[4]-ay,e1z=t[5]-az;
+    var e2x=t[6]-ax,e2y=t[7]-ay,e2z=t[8]-az;
+    var len1=Math.sqrt(e1x*e1x+e1y*e1y+e1z*e1z);
+    var len2=Math.sqrt(e2x*e2x+e2y*e2y+e2z*e2z);
+    var n1=Math.max(1,Math.min(10,Math.ceil(len1/(cellSize*0.6))));
+    var n2=Math.max(1,Math.min(10,Math.ceil(len2/(cellSize*0.6))));
+    for(var iu=0;iu<=n1;iu++){
+      var u=iu/n1;
+      for(var iv=0;iv<=n2;iv++){
+        var v=iv/n2;
+        if(u+v>1.001) continue;
+        var px=ax+e1x*u+e2x*v, py=ay+e1y*u+e2y*v, pz=az+e1z*u+e2z*v;
+        var key=Math.floor(px/cellSize)+','+Math.floor(py/cellSize)+','+Math.floor(pz/cellSize);
+        cells[key]=true;
+      }
+    }
+  }
+  return cells;
+}
+var VOX_DIRS=[
+  { d:[ 1,0,0], c:[[1,0,0],[1,1,0],[1,1,1],[1,0,1]] },
+  { d:[-1,0,0], c:[[0,0,1],[0,1,1],[0,1,0],[0,0,0]] },
+  { d:[0, 1,0], c:[[0,1,0],[0,1,1],[1,1,1],[1,1,0]] },
+  { d:[0,-1,0], c:[[0,0,1],[0,0,0],[1,0,0],[1,0,1]] },
+  { d:[0,0, 1], c:[[1,0,1],[1,1,1],[0,1,1],[0,0,1]] },
+  { d:[0,0,-1], c:[[0,0,0],[0,1,0],[1,1,0],[1,0,0]] }
+];
+function voxelsToTris(cells, cellSize){
+  var tris=[];
+  for(var key in cells){
+    var p=key.split(',');
+    var cx=+p[0], cy=+p[1], cz=+p[2];
+    for(var d=0;d<6;d++){
+      var dir=VOX_DIRS[d];
+      var nk=(cx+dir.d[0])+','+(cy+dir.d[1])+','+(cz+dir.d[2]);
+      if(cells[nk]) continue;                       /* face buried against another solid cell */
+      var c=dir.c, q=[];
+      for(var k=0;k<4;k++) q.push([(cx+c[k][0])*cellSize,(cy+c[k][1])*cellSize,(cz+c[k][2])*cellSize]);
+      tris.push([q[0][0],q[0][1],q[0][2], q[1][0],q[1][1],q[1][2], q[2][0],q[2][1],q[2][2]]);
+      tris.push([q[0][0],q[0][1],q[0][2], q[2][0],q[2][1],q[2][2], q[3][0],q[3][1],q[3][2]]);
+    }
+  }
+  return tris;
+}
+function voxelizeModel(m, res){
+  var src=m.origTris||m.tris;
+  var minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,minz=1e9,maxz=-1e9,i,k;
+  for(i=0;i<src.length;i++) for(k=0;k<9;k+=3){
+    var x=src[i][k],y=src[i][k+1],z=src[i][k+2];
+    if(x<minx)minx=x; if(x>maxx)maxx=x;
+    if(y<miny)miny=y; if(y>maxy)maxy=y;
+    if(z<minz)minz=z; if(z>maxz)maxz=z;
+  }
+  var span=Math.max(maxx-minx,maxy-miny,maxz-minz)||1;
+  var cellSize=span/res;
+  var cells=voxelizeMesh(src,cellSize);
+  if(Object.keys(cells).length>6000){ toast('Too fine to voxelize smoothly — try chunkier first.'); return false; }
+  m.origTris=src;
+  m.tris=voxelsToTris(cells,cellSize);
+  m.voxelRes=res;
+  m.voxelized=true;
+  return true;
+}
+function unvoxelizeModel(m){
+  if(m.origTris){ m.tris=m.origTris; m.voxelized=false; }
+}
 function importModelAt(tris, x, z, yaw, col){
   CUSTOM_MODELS.push({ tris:tris, x:x, y:0, z:z, yaw:yaw, scale:1, col:col });
 }
@@ -2392,38 +2471,56 @@ function pickModelColor(sub, onPick){
   showSheet('Pick a colour', sub, opts);
 }
 /* a loose dropped model: adjust its own scale/rotation/colour, or pull it */
+/* shared between the loose-model and wired-slot adjust sheets */
+function voxelizeOpts(m, reopen){
+  if(!m.voxelized){
+    return [{ t:'Voxelize', d:'Rebuilds it as cube geometry instead of the smooth mesh.',
+      fn:function(){ if(voxelizeModel(m,14)) toast('Voxelized — '+m.tris.length+' triangles'); reopen(); } }];
+  }
+  return [
+    { t:'Finer voxels', fn:function(){ voxelizeModel(m, Math.min(40,Math.round((m.voxelRes||14)*1.4))); reopen(); } },
+    { t:'Chunkier voxels', fn:function(){ voxelizeModel(m, Math.max(4,Math.round((m.voxelRes||14)/1.4))); reopen(); } },
+    { t:'Un-voxelize', d:'Back to the original smooth mesh.', fn:function(){ unvoxelizeModel(m); reopen(); } }
+  ];
+}
 function openModelAdjust(m){
+  var reopen=function(){ openModelAdjust(m); };
   var opts=[
     { t:'Repaint', fn:function(){
         pickModelColor('Flat-shaded only — one solid colour for the whole model.',
-          function(col){ m.col=col; closeSheet(); openModelAdjust(m); }); } },
-    { t:'Rotate 45°', fn:function(){ m.yaw+=PI/4; openModelAdjust(m); } },
-    { t:'Scale up', right:'&times;1.15', fn:function(){ m.scale=Math.min(8,m.scale*1.15); openModelAdjust(m); } },
-    { t:'Scale down', right:'&times;0.87', fn:function(){ m.scale=Math.max(0.1,m.scale/1.15); openModelAdjust(m); } },
+          function(col){ m.col=col; closeSheet(); reopen(); }); } },
+    { t:'Rotate 45°', fn:function(){ m.yaw+=PI/4; reopen(); } },
+    { t:'Scale up', right:'&times;1.15', fn:function(){ m.scale=Math.min(8,m.scale*1.15); reopen(); } },
+    { t:'Scale down', right:'&times;0.87', fn:function(){ m.scale=Math.max(0.1,m.scale/1.15); reopen(); } },
+    { rule:true }
+  ].concat(voxelizeOpts(m, reopen)).concat([
     { rule:true },
     { t:'Remove it', fn:function(){
         var idx=CUSTOM_MODELS.indexOf(m); if(idx>=0) CUSTOM_MODELS.splice(idx,1);
         closeSheet(); toast('Removed.'); } },
     { t:'Done', fn:closeSheet }
-  ];
-  showSheet('Adjust model', 'Scale &times;'+m.scale.toFixed(2)+' &middot; '+m.tris.length+' triangles', opts);
+  ]);
+  showSheet('Adjust model', (m.voxelized?'Voxelized &middot; ':'')+'Scale &times;'+m.scale.toFixed(2)+' &middot; '+m.tris.length+' triangles', opts);
 }
 /* a wired slot: same adjustments, but they apply everywhere that slot is
    drawn (every car, every driver, ...) since it is one shared template */
 function openSlotAdjust(key, label){
   var m=CUSTOM_SLOTS[key];
+  var reopen=function(){ openSlotAdjust(key,label); };
   var opts=[
     { t:'Repaint', fn:function(){
         pickModelColor('Flat-shaded only — one solid colour for the whole model.',
-          function(col){ m.col=col; closeSheet(); openSlotAdjust(key,label); }); } },
-    { t:'Rotate 45°', fn:function(){ m.rot=(m.rot||0)+PI/4; openSlotAdjust(key,label); } },
-    { t:'Scale up', right:'&times;1.15', fn:function(){ m.scale=Math.min(4,(m.scale||1)*1.15); openSlotAdjust(key,label); } },
-    { t:'Scale down', right:'&times;0.87', fn:function(){ m.scale=Math.max(0.1,(m.scale||1)/1.15); openSlotAdjust(key,label); } },
+          function(col){ m.col=col; closeSheet(); reopen(); }); } },
+    { t:'Rotate 45°', fn:function(){ m.rot=(m.rot||0)+PI/4; reopen(); } },
+    { t:'Scale up', right:'&times;1.15', fn:function(){ m.scale=Math.min(4,(m.scale||1)*1.15); reopen(); } },
+    { t:'Scale down', right:'&times;0.87', fn:function(){ m.scale=Math.max(0.1,(m.scale||1)/1.15); reopen(); } },
+    { rule:true }
+  ].concat(voxelizeOpts(m, reopen)).concat([
     { rule:true },
     { t:'Revert to the original look', fn:function(){ delete CUSTOM_SLOTS[key]; closeSheet(); toast(label+' back to normal.'); } },
     { t:'Done', fn:closeSheet }
-  ];
-  showSheet('Adjust: '+label, 'Scale &times;'+(m.scale||1).toFixed(2)+' &middot; '+m.tris.length+' triangles', opts);
+  ]);
+  showSheet('Adjust: '+label, (m.voxelized?'Voxelized &middot; ':'')+'Scale &times;'+(m.scale||1).toFixed(2)+' &middot; '+m.tris.length+' triangles', opts);
 }
 function chooseModelDestination(tris){
   var opts=[
