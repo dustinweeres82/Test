@@ -2079,9 +2079,68 @@ var TERRAIN_CELL=0.5, TERRAIN_FLOOR=-6, TERRAIN_CEIL=6, TERRAIN_CHUNK=8, TERRAIN
 var TERRAIN_TOP_COL=[186,158,107], TERRAIN_SIDE_COL=[112,86,56];   /* TOP_COL matches C_SAND so the seam back to flat ground is invisible */
 var TERRAIN_H={}, TERRAIN_CHUNKS={}, digProgress=0, buildProgress=0, camGroundY=0;
 function terrainCol(x,z){ return [Math.floor(x/TERRAIN_CELL), Math.floor(z/TERRAIN_CELL)]; }
+/* ── procedural dunes ──────────────────────────────────────────────────
+   The forecourt, the shop, the highway and the little back apron have to
+   stay flat for gameplay (parking, walking through the door, the register
+   line), so those footprints are excluded; everywhere else in the
+   ~52x60 playable rectangle gets a low, rolling baseline height from a
+   seeded value-noise field instead of a flat 0 — the same rngFrom hash
+   this file already uses for sand mottling, just sampled on a coarse
+   lattice and smoothstep-interpolated so neighbouring columns roll into
+   each other instead of stair-stepping randomly. Player edits (dig/build)
+   are stored as the column's new TOTAL height, on top of this baseline,
+   not as a separate delta — so digging into a dune just carves into
+   whatever the dune's natural height already was there. */
+var DUNE_LATTICE=6, DUNE_AMP=2;
+function duneLatticeVal(lx,lz){ return rngFrom((lx*92821+lz*68917)|0)(); }
+function duneNoise(x,z){
+  var gx=x/DUNE_LATTICE, gz=z/DUNE_LATTICE;
+  var x0=Math.floor(gx), z0=Math.floor(gz), tx=smooth(gx-x0), tz=smooth(gz-z0);
+  var v00=duneLatticeVal(x0,z0),   v10=duneLatticeVal(x0+1,z0);
+  var v01=duneLatticeVal(x0,z0+1), v11=duneLatticeVal(x0+1,z0+1);
+  return lerp(lerp(v00,v10,tx), lerp(v01,v11,tx), tz);
+}
+function inFlatZone(x,z){
+  if(x>LOT.x0-3 && x<LOT.x1+3 && z>LOT.z0-3 && z<LOT.z1+3) return true;                         /* forecourt */
+  if(x>INT.x-ROOM_HX-3 && x<INT.x+ROOM_HX+3 && z>INT.z-ROOM_HZ-3 && z<INT.z+ROOM_HZ+3) return true; /* shop */
+  if(z>-33 && z<-27) return true;                                                                /* highway */
+  if(x>-10 && x<10 && z>-26 && z<-14) return true;                                               /* back apron */
+  return false;
+}
+function terrainBaseHeight(cx,cz){
+  var wx=cx*TERRAIN_CELL, wz=cz*TERRAIN_CELL;
+  if(inFlatZone(wx,wz)) return 0;
+  return Math.round(duneNoise(wx,wz)*DUNE_AMP);
+}
+function terrainEffHeight(cx,cz){
+  var key=cx+','+cz, h=TERRAIN_H[key];
+  return h!==undefined ? h : terrainBaseHeight(cx,cz);
+}
+/* stream dune chunks in near the player, like chunk loading — each chunk
+   is only ever generated once (existing entries, dug/built or not, are
+   left alone), so this only does real work when the player crosses into
+   a new patch of desert, not every frame */
+var duneGenCX=null, duneGenCZ=null;
+function ensureDuneChunksNear(x,z){
+  var wcell=TERRAIN_CHUNK*TERRAIN_CELL, R=22, span=Math.ceil(R/wcell);
+  var pci=Math.floor(x/wcell), pcj=Math.floor(z/wcell);
+  if(duneGenCX===pci && duneGenCZ===pcj) return;
+  duneGenCX=pci; duneGenCZ=pcj;
+  var chx0=Math.floor(terrainCol(-27,0)[0]/TERRAIN_CHUNK), chx1=Math.floor(terrainCol(27,0)[0]/TERRAIN_CHUNK);
+  var chz0=Math.floor(terrainCol(0,-35)[1]/TERRAIN_CHUNK), chz1=Math.floor(terrainCol(0,27)[1]/TERRAIN_CHUNK);
+  for(var ci=pci-span; ci<=pci+span; ci++){
+    if(ci<chx0||ci>chx1) continue;
+    for(var cj=pcj-span; cj<=pcj+span; cj++){
+      if(cj<chz0||cj>chz1) continue;
+      var key=ci+','+cj;
+      if(TERRAIN_CHUNKS[key]) continue;
+      TERRAIN_CHUNKS[key]={ topTris:[], sideTris:[], dirty:true };
+    }
+  }
+}
 function terrainHeightAt(x,z){
   var c=terrainCol(x,z);
-  return (TERRAIN_H[c[0]+','+c[1]]||0)*TERRAIN_CELL;
+  return terrainEffHeight(c[0],c[1])*TERRAIN_CELL;
 }
 /* where the camera is looking at the terrain surface, or null if it isn't
    looking down far enough or the spot is out of reach — a few fixed-point
@@ -2114,8 +2173,8 @@ function editTerrain(x,z,delta,radius){
   for(var dx=-ir;dx<=ir;dx++) for(var dz=-ir;dz<=ir;dz++){
     if(dx*dx+dz*dz>r2) continue;
     var cx=c0[0]+dx, cz=c0[1]+dz, key=cx+','+cz;
-    var h=clamp((TERRAIN_H[key]||0)+delta, TERRAIN_FLOOR+1, TERRAIN_CEIL);
-    if(h===0) delete TERRAIN_H[key]; else TERRAIN_H[key]=h;
+    var h=clamp(terrainEffHeight(cx,cz)+delta, TERRAIN_FLOOR+1, TERRAIN_CEIL);
+    TERRAIN_H[key]=h;
     markTerrainDirty(cx,cz);
     touched++;
   }
@@ -2148,11 +2207,11 @@ function remeshTerrainChunk(key){
   chunk.dirty=false;
   var anyMod=false;
   for(var lx=0;lx<TERRAIN_CHUNK && !anyMod;lx++)
-    for(var lz=0;lz<TERRAIN_CHUNK;lz++) if(TERRAIN_H[(x0+lx)+','+(z0+lz)]){ anyMod=true; break; }
+    for(var lz=0;lz<TERRAIN_CHUNK;lz++) if(terrainEffHeight(x0+lx,z0+lz)){ anyMod=true; break; }
   if(!anyMod){ chunk.topTris=[]; chunk.sideTris=[]; return; }
   var cells={};
   for(var ix=-1;ix<=TERRAIN_CHUNK;ix++) for(var iz=-1;iz<=TERRAIN_CHUNK;iz++){
-    var cx=x0+ix, cz=z0+iz, h=TERRAIN_H[cx+','+cz]||0;
+    var cx=x0+ix, cz=z0+iz, h=terrainEffHeight(cx,cz);
     for(var cy=TERRAIN_FLOOR;cy<h;cy++) cells[cx+','+cy+','+cz]=true;
   }
   var built=voxelsToTrisTerrain(cells, TERRAIN_CELL);
@@ -3030,7 +3089,12 @@ function voxelizeModel(m, res){
   m.origTris=src;
   m.voxelCells=cells;             /* kept live (not just the meshed tris) so single cubes can be knocked out later */
   m.voxelCellSize=cellSize;
-  m.tris=voxelsToTris(cells,cellSize);
+  if(m.palette){                  /* a multicoloured (.vox-imported) model needs its per-triangle colours regenerated in step with the new mesh, or they fall out of length-sync with it */
+    var builtV=voxelsToTrisColored(cells,cellSize,m.palette);
+    m.tris=builtV.tris; m.triCols=builtV.cols;
+  } else {
+    m.tris=voxelsToTris(cells,cellSize);
+  }
   m.voxelRes=res;
   m.voxelized=true;
   m.onFire=false; m.fireFrontier=null; m.fireSeen=null;   /* re-gridding rebuilds from the pristine source, so any damage/fire state is stale */
@@ -4909,7 +4973,7 @@ function blocked(x,z,ignoreTerrain){
   if(x<-26||x>26||z<-34||z>26) return true;
   if(!ignoreTerrain){
     var tc=terrainCol(x,z);
-    if(Math.abs(TERRAIN_H[tc[0]+','+tc[1]]||0) > TERRAIN_WALK_LIMIT) return true;
+    if(Math.abs(terrainEffHeight(tc[0],tc[1])) > TERRAIN_WALK_LIMIT) return true;
   }
   var i;
   for(i=0;i<PUMPS.length;i++) if(Math.abs(x-PUMPS[i].x)<1.0 && Math.abs(z-PUMPS[i].z)<1.5) return true;
@@ -6079,6 +6143,7 @@ function frame(now){
   }
   if(!sheetOpen){
     walk(dt);
+    ensureDuneChunksNear(camX,camZ);
     updateAim();
     if(mouseDown && locked) holdUse(dt);
     if(mouseDownR && locked && tool==='shovel') holdBuild(dt);
