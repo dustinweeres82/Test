@@ -1023,6 +1023,7 @@ function drawCar(c){
 
   /* ── body shell ─────────────────────────────────────────────────────── */
   carHullDraw(B,o, dirty, low, arch);
+  drawPoopMarks(c,B,o);
 
   /* ── greenhouse: pillars, roof and inset glass ──────────────────────── */
   var G=CAR_CAB, cabpts=[], CABREF=[0,1.34,0];
@@ -1163,8 +1164,8 @@ function drawCar(c){
               undefined, [0,1.30,-0.78], 0.20);
   }
 
-  /* the driver, sitting up in the cabin */
-  if(!c.gone && c.state!=='leaving') drawDriver(c,B,o);
+  /* the driver, sitting up in the cabin — empty once they have stepped out to pay */
+  if(!c.gone && c.state!=='leaving' && !c.custState) drawDriver(c,B,o);
   clearAO();
   /* dirt speckles */
   if(c.dirt>0.05 && d<22){
@@ -1478,9 +1479,11 @@ function carHotspots(c, out){
   p=P( 0.82,1.30,-0.78); out.push({ car:c, kind:'mirrorR',x:p[0],y:p[1],z:p[2], r:0.32 });
   p=P(0,0.56,-2.06);     out.push({ car:c, kind:'plate',  x:p[0],y:p[1],z:p[2], r:0.3 });
   p=P(0,1.34,-1.13);     out.push({ car:c, kind:'glass',  x:p[0],y:p[1],z:p[2], r:0.55 });
-  p=P(-0.28,1.45,-1.05); out.push({ car:c, kind:'driver', x:p[0],y:p[1],z:p[2], r:0.6 });
-  if(c.hat && c.hat.c){
-    p=P(-0.28,1.62,-0.85); out.push({ car:c, kind:'hat', x:p[0],y:p[1],z:p[2], r:0.34 });
+  if(!c.custState){
+    p=P(-0.28,1.45,-1.05); out.push({ car:c, kind:'driver', x:p[0],y:p[1],z:p[2], r:0.6 });
+    if(c.hat && c.hat.c){
+      p=P(-0.28,1.62,-0.85); out.push({ car:c, kind:'hat', x:p[0],y:p[1],z:p[2], r:0.34 });
+    }
   }
 }
 function allHotspots(){
@@ -1493,17 +1496,13 @@ function allHotspots(){
     out.push({ kind:'ledger', x:BASE.x+BASE_HX-0.8, y:1.2, z:BASE.z+1.2, r:0.6 });
     return out;
   }
-  if(inStore){
-    out.push({ kind:'exitStore', x:INT.x, y:1.3, z:INT.z+ROOM_HZ-0.2, r:0.7 });
-    out.push({ kind:'candyShelf', x:INT.x-2.6, y:1.0, z:INT.z-1.2, r:0.9 });
-    out.push({ kind:'hotdogRoller', x:INT.x-0.6, y:1.0, z:INT.z-2.0, r:0.6 });
-    out.push({ kind:'slushee', x:INT.x+1.0, y:1.0, z:INT.z-2.0, r:0.6 });
-    out.push({ kind:'intercom', x:INT.x+3.0, y:1.5, z:INT.z-1.0, r:0.45 });
-    out.push({ kind:'jingleBox', x:INT.x+3.0, y:0.9, z:INT.z+0.8, r:0.45 });
-    out.push({ kind:'basementDoor', x:INT.x-3.0, y:1.2, z:INT.z+1.4, r:0.6 });
-    return out;
-  }
-  out.push({ kind:'storeDoor', x:SHOP.x, y:1.3, z:SHOP.z+SHOP.d/2+0.1, r:0.7 });
+  out.push({ kind:'candyShelf', x:INT.x-2.2, y:1.0, z:INT.z-1.7, r:0.9 });
+  out.push({ kind:'hotdogRoller', x:INT.x-0.2, y:1.0, z:INT.z-1.9, r:0.6 });
+  out.push({ kind:'slushee', x:INT.x+1.6, y:1.0, z:INT.z-1.9, r:0.6 });
+  out.push({ kind:'intercom', x:INT.x+2.3, y:1.5, z:INT.z-0.6, r:0.45 });
+  out.push({ kind:'jingleBox', x:INT.x+2.3, y:0.9, z:INT.z+0.8, r:0.45 });
+  out.push({ kind:'basementDoor', x:INT.x+2.2, y:1.2, z:INT.z+1.8, r:0.6 });
+  out.push({ kind:'register', x:REGISTER.x, y:1.1, z:REGISTER.z, r:0.7 });
   if(buyerHere) out.push({ kind:'buyer', x:BUYER_SPOT.x, y:1.3, z:BUYER_SPOT.z, r:0.6 });
   for(i=0;i<CARS.length;i++) if(CARS[i].state==='waiting') carHotspots(CARS[i], out);
   for(i=0;i<PUMPS.length;i++){
@@ -1552,8 +1551,13 @@ function actionFor(h){
     ? { t:'Take down the "Out of Order" sign' }
     : { t:'Hang a fake "Out of Order" sign', bad:true };
   if(h.kind==='gull') return tool==='sponge' ? { t:'En garde', bad:true } : { t:'Shoo it away' };
-  if(h.kind==='storeDoor') return { t:'Go into the store' };
-  if(h.kind==='exitStore') return { t:'Head back outside' };
+  if(h.kind==='register'){
+    var front=REG_LINE[0];
+    if(!front) return { t:'No one in line right now' };
+    if(front.custState==='walkingIn') return { t: front.name+' is still walking up' };
+    if(front.stallT>0) return { t:'"Just... loading."' };
+    return { t:'Take the payment' };
+  }
   if(h.kind==='candyShelf') return { t:'Rearrange every shelf', bad:true };
   if(h.kind==='hotdogRoller') return { t:'Sneeze in the roller', bad:true };
   if(h.kind==='slushee') return { t:'Crank it past the red line', bad:true };
@@ -1578,7 +1582,6 @@ function actionFor(h){
     if(tool==='gun')     return { t:'Fire', bad:true };
     if(tool==='crowbar') return { t:'Swing the crowbar', bad:true };
     if(tool==='fireext') return { t:'Hold to spray the extinguisher', hold:true, bad:true };
-    if(c.served) return c.stallT>0 ? { t:'"Just... loading."' } : { t:'Take the payment' };
     if(tool==='spray') return { t:'Hold to spray the driver', hold:true, bad:true };
     if(heldNozzle) return { t:'Hold to hose the driver down', hold:true, bad:true };
     return { t:'“'+driverLine(c)+'”' };
@@ -1592,7 +1595,7 @@ function actionFor(h){
     if(heldNozzle) return (h.kind==='panelL'||h.kind==='panelR')
       ? { t:'Hold to hose it down &middot; tap to whip the hose', hold:true, bad:true }
       : { t:'Hold to hose it down', hold:true, bad:true };
-    if(heldPoop && (h.kind==='panelL'||h.kind==='panelR'||h.kind==='front')) return { t:'Smear it on there', bad:true };
+    if(heldPoop && (h.kind==='panelL'||h.kind==='panelR'||h.kind==='front')) return { t:'Hold to smear it on there', hold:true, bad:true };
     if(tool==='lighter' && c.soaked>0.2) return { t:'Light it', bad:true };
     return null;
   }
@@ -1637,8 +1640,7 @@ function pressUse(){
   if(h.kind==='poop'){ pickUpPoop(h); return; }
   if(h.kind==='restroom'){ toggleRestroom(); return; }
   if(h.kind==='gull'){ duelGull(); return; }
-  if(h.kind==='storeDoor'){ enterStore(); return; }
-  if(h.kind==='exitStore'){ exitStore(); return; }
+  if(h.kind==='register'){ tapRegister(); return; }
   if(h.kind==='candyShelf'){ addChaos(2); toast(pick(['Every bag now two rows away from its label.',
       'Nothing is where it was.','A slow, deliberate act of chaos.'])); return; }
   if(h.kind==='hotdogRoller'){ addChaos(3); toast(pick(['You sneeze directly into the roller.',
@@ -1657,9 +1659,7 @@ function pressUse(){
   if(h.kind==='hat'){ removeHat(c); return; }
   if(h.kind==='driver' && tool==='gun'){ shootDriver(c); return; }
   if(h.kind==='driver' && tool==='crowbar'){ bashDriver(c); return; }
-  if(h.kind==='driver' && c.served && !(c.stallT>0)){ openPayment(c); return; }
   if(heldNozzle && (h.kind==='panelL'||h.kind==='panelR')){ nozzleWhip(c,h); return; }
-  if(heldPoop && (h.kind==='panelL'||h.kind==='panelR'||h.kind==='front')){ smearPoop(c,h); return; }
   if(tool==='wrench' && h.kind==='glass' && c.glass>0.5){ breakGlass(c); return; }
   if(tool==='lighter' && c.soaked>0.2 && c.onFire<=0){ ignite(c); return; }
   if((h.kind==='mirrorL'||h.kind==='mirrorR'||h.kind==='plate')){
@@ -1680,6 +1680,7 @@ function holdUse(dt){
   if(tool==='fireext' && h.kind==='driver'){ foamDriver(c,dt); return; }
   if(tool==='fireext' && c.onFire>0){ extinguish(c,dt); return; }
   if(heldNozzle && (h.kind!=='cap')){ sprayFuel(c,h,dt); return; }
+  if(heldPoop && (h.kind==='panelL'||h.kind==='panelR'||h.kind==='front')){ smearPoop(c,h,dt); return; }
   if(tool==='sponge' && c.dirt>0){ scrub(c,dt); return; }
   if(tool==='spray'){ sprayPaint(c,h,dt); return; }
 }
@@ -1862,7 +1863,8 @@ var SPILLS=[], FX=[], partsBin=0, partStock=0, chaosScore=0, reviewLog=[];
 function addChaos(n){ chaosScore=clamp(chaosScore+n,0,100); }
 
 /* ── the least dignified prank in the game ───────────────────────────────── */
-var POOP_PILES=[], poopTimer=rnd(10,20), heldPoop=false;
+var POOP_PILES=[], poopTimer=rnd(10,20), heldPoop=false, poopSupply=0;
+var POOP_ANCHOR={ panelL:[-0.90,1.00,-0.20], panelR:[0.90,1.00,-0.20], front:[0,0.90,-2.05] };
 function spawnPoopPile(){
   if(POOP_PILES.length>=3) return;
   for(var tries=0;tries<12;tries++){
@@ -1875,18 +1877,44 @@ function spawnPoopPile(){
 function pickUpPoop(h){
   var i=POOP_PILES.indexOf(h.pile);
   if(i>=0) POOP_PILES.splice(i,1);
-  heldPoop=true;
+  heldPoop=true; poopSupply=1;
   toast('Picked it up. This was a bad idea.');
 }
-function smearPoop(c,h){
+/* hold + drag: keeps depositing streak marks at the aimed panel for as long as
+   you hold it down and the supply lasts, instead of one instant smear */
+function smearPoop(c,h,dt){
   if(!heldPoop) return;
-  heldPoop=false; c.pooped=true;
-  c.mood=Math.max(0,c.mood-0.4); c.angry=Math.max(c.angry,0.4);
-  addChaos(5);
-  for(var i=0;i<5;i++) FX.push({ x:h.x+rnd(-0.15,0.15), y:h.y+rnd(-0.05,0.15), z:h.z+rnd(-0.15,0.15),
-      vy:rnd(0.2,0.5), t:0, life:0.4, r:0.03, col:[74,54,34] });
-  toast(pick(['Smeared right across the door handle.','A little present, right on the panel.',
-              'You will regret that decision. Eventually.']));
+  if(!c.pooped){
+    c.pooped=true;
+    addChaos(3);
+    toast(pick(['Smeared right across the door handle.','A little present, right on the panel.',
+                'You will regret that decision. Eventually.']));
+  }
+  c.mood=Math.max(0,c.mood-dt*0.5); c.angry=Math.max(c.angry,0.3);
+  addChaos(dt*2.5);
+  c.poopMarkT=(c.poopMarkT||0)-dt;
+  if(c.poopMarkT<=0){
+    c.poopMarkT=0.07;
+    var anchor=POOP_ANCHOR[h.kind]||[0,1,0];
+    c.poopMarks=c.poopMarks||[];
+    if(c.poopMarks.length<60)
+      c.poopMarks.push({ x:anchor[0]+rnd(-0.32,0.32), y:anchor[1]+rnd(-0.24,0.24), z:anchor[2]+rnd(-0.10,0.10),
+                          r:rnd(0.045,0.085) });
+  }
+  for(var i=0;i<2;i++) FX.push({ x:h.x+rnd(-0.15,0.15), y:h.y+rnd(-0.05,0.15), z:h.z+rnd(-0.15,0.15),
+      vy:rnd(0.2,0.5), t:0, life:0.3, r:0.025, col:[74,54,34] });
+  poopSupply=Math.max(0,poopSupply-dt*0.35);
+  if(poopSupply<=0){
+    heldPoop=false;
+    toast(pick(['Out. Probably for the best.','All gone. Somehow that is worse.']));
+  }
+}
+function drawPoopMarks(c,B,o){
+  if(!c.poopMarks) return;
+  for(var i=0;i<c.poopMarks.length;i++){
+    var m=c.poopMarks[i];
+    meshBlobB(B,o, m.x,m.y,m.z, m.r, m.r*0.55, m.r*0.65, i, [66,48,30], 0.6, 0.2);
+  }
 }
 /* ── the fake "Out of Order" sign ─────────────────────────────────────────── */
 var restroomBroken=false;
@@ -1931,74 +1959,74 @@ function drawGull(){
   meshBlobB(B,o, 0.10,0.02,0.02, 0.09,0.03,0.14,(GULL.seed*1000+7)|0,[178,182,190],0.7,0.10); /* wing */
   meshBlobB(B,o,-0.10,0.02,0.02, 0.09,0.03,0.14,(GULL.seed*1000+9)|0,[178,182,190],0.7,0.10); /* wing */
 }
-/* ── the store interior: a second little world, tucked far out of the way ─── */
-var INT={x:130,z:60}, ROOM_HX=3.6, ROOM_HZ=2.6, ROOM_H=2.6;
-var inStore=false, prevX=0, prevZ=0, prevYaw=0;
+/* ── the store: a real room built right onto the lot, not a separate scene.
+   No teleport — the south wall just has a gap in it, and the room is always
+   drawn and always collides, same as any other piece of the world. ───────── */
+var INT={ x:SHOP.x+SHOP.w/2+1.2+3.0, z:SHOP.z }, ROOM_HX=3.0, ROOM_HZ=2.4, ROOM_H=2.6, DOOR_HALF=0.9;
 var jingleOn=false, jingleT=6;
-function enterStore(){
-  prevX=camX; prevZ=camZ; prevYaw=camYaw;
-  camX=INT.x; camZ=INT.z+ROOM_HZ-0.6; camY=1.68; camYaw=PI; camPitch=0;
-  inStore=true;
-  toast('The bell over the door jingles.');
-}
-function exitStore(){
-  camX=prevX; camZ=prevZ; camYaw=prevYaw; camY=1.68; camPitch=0;
-  inStore=false;
-  toast('Back out into the heat.');
-}
+var REGISTER={ x:INT.x-2.2, y:1.1, z:INT.z+ROOM_HZ-0.6 };
+var REG_LINE=[];
+function regSlot(i){ return { x:REGISTER.x-i*0.55, z:REGISTER.z }; }
 function wallQuad(x0,z0,x1,z1,y0,y1,col){
   var p=[x0,y0,z0, x1,y0,z1, x1,y1,z1, x0,y1,z0];
   emitPoly(p, lit(col,(z1-z0),0.15,-(x1-x0),y0), null);
 }
 function drawCandyShelf(){
-  var B=basis(0,0,0), o=[INT.x-2.6,0,INT.z-1.2];
+  var B=basis(0,0,0), o=[INT.x-2.2,0,INT.z-1.7];
   drawBox(B,o, 0,0.9,0, 0.35,0.9,0.9, [196,150,90], null);
   drawBox(B,o, 0,0.55,0.05, 0.32,0.03,0.85, [230,90,90], null);
   drawBox(B,o, 0,0.95,0.05, 0.32,0.03,0.85, [90,170,230], null);
   drawBox(B,o, 0,1.35,0.05, 0.32,0.03,0.85, [240,210,80], null);
 }
 function drawHotdogRoller(){
-  var B=basis(0,0,0), o=[INT.x-0.6,0,INT.z-2.0];
+  var B=basis(0,0,0), o=[INT.x-0.2,0,INT.z-1.9];
   drawBox(B,o, 0,0.75,0, 0.4,0.35,0.22, [214,60,50], null);
   drawBox(B,o, 0,1.05,0, 0.42,0.06,0.24, [230,230,225], null);
   for(var i=-1;i<=1;i++) drawBox(B,o, i*0.14,0.95,0, 0.06,0.06,0.20, [222,170,120], null);
 }
 function drawSlushee(){
-  var B=basis(0,0,0), o=[INT.x+1.0,0,INT.z-2.0];
+  var B=basis(0,0,0), o=[INT.x+1.6,0,INT.z-1.9];
   drawBox(B,o, 0,0.65,0, 0.28,0.60,0.28, [230,230,232], null);
   drawBox(B,o, -0.10,1.25,0, 0.10,0.28,0.10, [70,170,230], null);
   drawBox(B,o, 0.10,1.25,0, 0.10,0.28,0.10, [230,60,120], null);
 }
 function drawIntercom(){
-  var B=basis(0,0,0), o=[INT.x+3.2,0,INT.z-1.0];
+  var B=basis(0,0,0), o=[INT.x+2.3,0,INT.z-0.6];
   drawBox(B,o, 0,1.5,0, 0.03,0.14,0.10, [60,60,64], null);
 }
 function drawJingleBox(){
-  var B=basis(0,0,0), o=[INT.x+3.2,0,INT.z+0.8];
+  var B=basis(0,0,0), o=[INT.x+2.3,0,INT.z+0.8];
   var col = jingleOn ? [230,190,60] : [140,140,140];
   drawBox(B,o, 0,0.7,0, 0.16,0.10,0.10, col, null);
+}
+function drawRegister(){
+  var B=basis(0,0,0), o=[REGISTER.x,0,REGISTER.z];
+  drawBox(B,o, 0,0.55,0, 0.42,0.55,0.30, [150,110,70], null);
+  drawBox(B,o, 0,0.90,0, 0.16,0.14,0.12, [200,204,210], null);
+  drawBox(B,o, 0,1.06,0, 0.08,0.06,0.08, [230,230,225], null);
 }
 function drawStoreInterior(){
   setAO(0,0);
   var x0=INT.x-ROOM_HX, x1=INT.x+ROOM_HX, z0=INT.z-ROOM_HZ, z1=INT.z+ROOM_HZ, hgt=ROOM_H;
-  var wallCol=[232,222,198], doorHalf=0.75;
+  var wallCol=[232,222,198];
   groundQuad(INT.x, INT.z, ROOM_HX, ROOM_HZ, 0, [214,196,160], 1, 0.0);
   groundQuad(INT.x, INT.z, ROOM_HX, ROOM_HZ, 0, [248,244,234], 1, hgt);
   wallQuad(x0,z0, x1,z0, 0,hgt, wallCol);
   wallQuad(x0,z0, x0,z1, 0,hgt, wallCol);
   wallQuad(x1,z1, x1,z0, 0,hgt, wallCol);
-  wallQuad(x1,z1, INT.x+doorHalf,z1, 0,hgt, wallCol);
-  wallQuad(INT.x-doorHalf,z1, x0,z1, 0,hgt, wallCol);
-  wallQuad(INT.x-doorHalf,z1, INT.x+doorHalf,z1, hgt*0.72,hgt, wallCol);
+  wallQuad(x1,z1, INT.x+DOOR_HALF,z1, 0,hgt, wallCol);
+  wallQuad(INT.x-DOOR_HALF,z1, x0,z1, 0,hgt, wallCol);
+  wallQuad(INT.x-DOOR_HALF,z1, INT.x+DOOR_HALF,z1, hgt*0.72,hgt, wallCol);
   drawCandyShelf();
   drawHotdogRoller();
   drawSlushee();
   drawIntercom();
   drawJingleBox();
+  drawRegister();
 }
 function slusheeBoom(){
   addChaos(4);
-  for(var i=0;i<18;i++) FX.push({ x:INT.x+1.0+rnd(-0.3,0.3), y:1.3+rnd(0,0.4), z:INT.z-2.0+rnd(-0.3,0.3),
+  for(var i=0;i<18;i++) FX.push({ x:INT.x+1.6+rnd(-0.3,0.3), y:1.3+rnd(0,0.4), z:INT.z-1.9+rnd(-0.3,0.3),
       vy:rnd(0.6,1.6), t:0, life:0.5, r:0.04, col: Math.random()<0.5?[70,170,230]:[230,60,120] });
   toast('The slushee machine loses containment. Gloriously.');
 }
@@ -2225,7 +2253,12 @@ function drawHeld(){
   var OPEN = [0.22,0.16,0.18,0.26, 0.30, 0.30, 0.20];
   var pose, hx,hy,hz, hyaw,hpit,hrol, grip=0, ay=-0.52, ap=0.62, hdist=1;
 
-  if(heldNozzle){                                     /* ── pistol grip ── */
+  if(heldPoop){                                       /* ── cupped, and regretting it ── */
+    pose = [0.42,0.36,0.38,0.44, 0.32, 0.22, 0.14];
+    pose[0] = 0.42 - 0.14*hndHold;
+    hx = 0.238+sway + hndHold*0.05; hy = -0.216+bob+idle; hz = 0.516 + jab*0.06 + hndHold*0.05;
+    hyaw = -0.685+idle2*0.10; hpit = 0.775; hrol = -2.283;
+  } else if(heldNozzle){                                     /* ── pistol grip ── */
     pose = [0.16,1.22,1.26,1.22, 1.10, -0.10, 0.0];   /* trigger finger out */
     pose[0] = 0.16 + 0.78*Math.max(hndHold, jab);     /* squeeze the trigger */
     hx = 0.250+sway; hy = -0.215+bob+idle - pump*0.014;
@@ -2326,7 +2359,54 @@ function checkDone(c){
   var t=orderTasks(c), all=true;
   for(var i=0;i<t.length;i++) if(!t[i].done) all=false;
   syncOrder();
-  if(all && !c.served){ c.served=true; toast('Order complete — take the payment'); }
+  if(all && !c.served){
+    c.served=true;
+    c.custState='walkingIn'; c.walkX=c.x; c.walkZ=c.z; c.walkYaw=c.yaw;
+    REG_LINE.push(c);
+    toast('Order complete — heading in to pay');
+  }
+}
+/* ── the walk to the register and back ───────────────────────────────────── */
+function tapRegister(){
+  var front=REG_LINE[0];
+  if(front && front.custState==='waiting' && !(front.stallT>0)) openPayment(front);
+}
+function startWalkOut(c){
+  var idx=REG_LINE.indexOf(c);
+  if(idx>=0) REG_LINE.splice(idx,1);
+  c.custState='walkingOut';
+}
+function updateCustomerWalk(dt){
+  var i, c, dx, dz, d, sp;
+  for(i=0;i<REG_LINE.length;i++){
+    c=REG_LINE[i];
+    var slot=regSlot(i);
+    dx=slot.x-c.walkX; dz=slot.z-c.walkZ; d=Math.sqrt(dx*dx+dz*dz);
+    if(d>0.04){
+      sp=Math.min(1, 1.5*dt/d);
+      c.walkX+=dx*sp; c.walkZ+=dz*sp; c.walkYaw=Math.atan2(dx,dz);
+    }
+    c.custState = d<0.12 ? 'waiting' : 'walkingIn';
+  }
+  for(i=CARS.length-1;i>=0;i--){
+    c=CARS[i];
+    if(c.custState!=='walkingOut') continue;
+    dx=c.x-c.walkX; dz=c.z-c.walkZ; d=Math.sqrt(dx*dx+dz*dz);
+    if(d<0.15){ c.custState=null; finishCar(c,false); continue; }
+    sp=Math.min(1, 1.5*dt/d);
+    c.walkX+=dx*sp; c.walkZ+=dz*sp; c.walkYaw=Math.atan2(dx,dz);
+  }
+}
+function drawWalkers(){
+  for(var i=0;i<CARS.length;i++){
+    var c=CARS[i];
+    if(!c.custState) continue;
+    var bob=Math.sin(gTime*7+c.seed)*0.03;
+    var B=basis(c.walkYaw||0,0,0), o=[c.walkX,0,c.walkZ];
+    drawBox(B,o, 0,0.55+bob,0, 0.16,0.42,0.12, c.col, null);
+    drawBox(B,o, 0,1.10+bob,0, 0.13,0.13,0.13, [230,196,168], null);
+    if(c.hat && c.hat.c) drawBox(B,o, 0,1.22+bob,0, 0.15,0.05,0.15, c.hat.c, null);
+  }
 }
 /* payment, then a review on the way out */
 /* ── the payment sheet: pay it straight, skim it, or stall them ──────────── */
@@ -2403,7 +2483,7 @@ function collect(c, opt){
   cash += paid;
   ratings.push(stars); served++;
   showReview(c, stars, notes, paid);
-  finishCar(c, false);
+  startWalkOut(c);
 }
 function finishCar(c, silent, why){
   if(activeOrder===c) activeOrder=null;
@@ -3216,17 +3296,27 @@ function walk(dt){
   }
   camY = 1.68 + Math.sin(bobT)*0.022;
 }
+/* a real room's walls, as a thin solid band around its perimeter — except the
+   doorway, which simply has no band there, so walking through it just works */
+function wallBlocked(x,z,x0,x1,z0,z1,doorHalf,doorCX){
+  var WT=0.3;
+  if(z>=z0-WT && z<=z0+WT && x>=x0-WT && x<=x1+WT) return true;         /* north */
+  if(x>=x0-WT && x<=x0+WT && z>=z0-WT && z<=z1+WT) return true;         /* west  */
+  if(x>=x1-WT && x<=x1+WT && z>=z0-WT && z<=z1+WT) return true;         /* east  */
+  if(z>=z1-WT && z<=z1+WT && x>=x0-WT && x<=x1+WT){                     /* south, minus the door */
+    if(x<doorCX-doorHalf || x>doorCX+doorHalf) return true;
+  }
+  return false;
+}
 function blocked(x,z){
   if(inBasement){
     return x<BASE.x-BASE_HX+0.3 || x>BASE.x+BASE_HX-0.3 || z<BASE.z-BASE_HZ+0.3 || z>BASE.z+BASE_HZ-0.3;
-  }
-  if(inStore){
-    return x<INT.x-ROOM_HX+0.3 || x>INT.x+ROOM_HX-0.3 || z<INT.z-ROOM_HZ+0.3 || z>INT.z+ROOM_HZ-0.3;
   }
   if(x<-26||x>26||z<-34||z>26) return true;
   var i;
   for(i=0;i<PUMPS.length;i++) if(Math.abs(x-PUMPS[i].x)<1.0 && Math.abs(z-PUMPS[i].z)<1.5) return true;
   if(Math.abs(x-SHOP.x)<SHOP.w/2+0.4 && Math.abs(z-SHOP.z)<SHOP.d/2+0.4) return true;
+  if(wallBlocked(x,z, INT.x-ROOM_HX,INT.x+ROOM_HX, INT.z-ROOM_HZ,INT.z+ROOM_HZ, DOOR_HALF, INT.x)) return true;
   for(i=0;i<CARS.length;i++){
     var c=CARS[i]; if(c.state==='leaving') continue;
     var dx=x-c.x, dz=z-c.z;
@@ -4050,7 +4140,10 @@ function hndHand(Bh,Ba,oH, side, pose, detail){
 }
 function hndTool(Bh,oH, jab, osc, pump){
   var S=HND_S, GY=-0.066*S, GZ=0.080*S;      /* the shaft the fingers close on */
-  if(heldNozzle){
+  if(heldPoop){
+    meshBlobB(Bh,oH, 0,GY+0.014*S,GZ+0.032*S, 0.044*S,0.034*S,0.044*S, 5, [74,54,34], 1, 0.30);
+    meshBlobB(Bh,oH, 0.024*S,GY+0.006*S,GZ+0.056*S, 0.026*S,0.020*S,0.026*S, 7, [64,46,28], 1, 0.30);
+  } else if(heldNozzle){
     var gc = GRADES[heldNozzle.grade].col, dk=[54,58,66], mt=[196,204,214];
     meshPrismB(Bh,oH, 0,GY,GZ, 0.026*S, 0.056*S, 5,'x', dk, null, 1.0);              /* grip  */
     drawBox (Bh,oH, 0, GY+0.108*S, GZ+0.062*S, 0.038*S,0.040*S,0.098*S, gc);         /* body  */
@@ -4347,8 +4440,6 @@ function render(){
   DLn=0; glOpaque.length=0; glTrans.length=0;
   if(inBasement){
     drawBasementRoom();
-  } else if(inStore){
-    drawStoreInterior();
   } else {
     drawSky();
     drawClouds();
@@ -4362,6 +4453,8 @@ function render(){
     drawGull();
     drawBuyer();
     for(var i=0;i<CARS.length;i++) drawCar(CARS[i]);
+    drawStoreInterior();
+    drawWalkers();
     drawBallGuy();
     drawBallProps();
   }
@@ -4387,6 +4480,7 @@ function frame(now){
     updateAim();
     if(mouseDown && locked) holdUse(dt);
     updateCars(dt);
+    updateCustomerWalk(dt);
     updateSpawn(dt);
     updateTruck(dt);
     updateFX(dt);
@@ -4398,7 +4492,7 @@ function frame(now){
     if(chaosScore>0) chaosScore=Math.max(0,chaosScore-dt*0.6);
     poopTimer-=dt; if(poopTimer<=0){ spawnPoopPile(); poopTimer=rnd(18,30); }
     gullTimer-=dt; if(gullTimer<=0){ spawnGull(); gullTimer=rnd(20,35); }
-    if(inStore && jingleOn){
+    if(jingleOn){
       jingleT-=dt;
       if(jingleT<=0){ jingleT=6; addChaos(0.5);
         toast(pick(['That jingle. Again.','It loops. It always loops.','You will hear this in your sleep.'])); }
