@@ -166,6 +166,7 @@
 <canvas id="c"></canvas>
 <canvas id="ov"></canvas>
 <div id="hurtFlash"></div>
+<input type="file" id="modelFile" accept=".obj" style="display:none">
 
 <div id="hud">
   <div id="wallet" class="card"><span id="cash">$0</span>
@@ -2275,6 +2276,88 @@ function pourOil(c,dt){
   if(c.oilLevel>=1){ heldOil=false; toast('Topped off.'); checkDone(c); }
   else if(oilSupply<=0){ heldOil=false; toast('Out of oil.'); }
 }
+/* ── bring-your-own 3D models: press M, pick a .obj, it drops in the world ──
+   No texture/UV pipeline exists here — everything in this renderer is flat-
+   shaded triangles — so an imported model gets the same treatment as every
+   car and prop already does: one solid colour, lit per-face by emitFaceC. */
+var CUSTOM_MODELS=[];
+function parseOBJ(text){
+  var verts=[], tris=[], lines=text.split('\n');
+  for(var i=0;i<lines.length;i++){
+    var line=lines[i].trim();
+    if(line.charAt(0)==='v' && line.charAt(1)===' '){
+      var p=line.split(/\s+/);
+      verts.push([parseFloat(p[1]),parseFloat(p[2]),parseFloat(p[3])]);
+    } else if(line.charAt(0)==='f' && line.charAt(1)===' '){
+      var parts=line.split(/\s+/).slice(1);
+      var idx=parts.map(function(s){
+        var vi=parseInt(s.split('/')[0],10);
+        if(vi<0) vi=verts.length+1+vi;
+        return vi-1;
+      });
+      for(var k=1;k<idx.length-1;k++){
+        var a=verts[idx[0]], b=verts[idx[k]], cc=verts[idx[k+1]];
+        if(a&&b&&cc) tris.push([a[0],a[1],a[2], b[0],b[1],b[2], cc[0],cc[1],cc[2]]);
+      }
+    }
+  }
+  return tris;
+}
+/* re-centres on x/z, drops it to sit on the ground at y=0, and scales the
+   longest axis to ~1.6 units — imported files arrive at any scale/origin,
+   this makes them show up at a sane, human/car-ish size without fiddling */
+function normalizeOBJ(tris){
+  var minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,minz=1e9,maxz=-1e9,i,k;
+  for(i=0;i<tris.length;i++) for(k=0;k<9;k+=3){
+    var x=tris[i][k],y=tris[i][k+1],z=tris[i][k+2];
+    if(x<minx)minx=x; if(x>maxx)maxx=x;
+    if(y<miny)miny=y; if(y>maxy)maxy=y;
+    if(z<minz)minz=z; if(z>maxz)maxz=z;
+  }
+  var cx=(minx+maxx)/2, cz=(minz+maxz)/2;
+  var span=Math.max(maxx-minx, maxy-miny, maxz-minz)||1;
+  var s=1.6/span;
+  for(i=0;i<tris.length;i++) for(k=0;k<9;k+=3){
+    tris[i][k]=(tris[i][k]-cx)*s;
+    tris[i][k+1]=(tris[i][k+1]-miny)*s;
+    tris[i][k+2]=(tris[i][k+2]-cz)*s;
+  }
+  return tris;
+}
+function drawCustomModel(m){
+  var B=basis(m.yaw,0,0), o=[m.x,0,m.z], v=[];
+  for(var i=0;i<m.tris.length;i++){
+    var t=m.tris[i];
+    v.length=0;
+    for(var k=0;k<9;k+=3){
+      var p=ptOf(B,o, t[k]*m.scale, t[k+1]*m.scale, t[k+2]*m.scale);
+      v.push(p[0],p[1],p[2]);
+    }
+    emitFaceC(v, m.col, m.x, m.y+0.6*m.scale, m.z);
+  }
+}
+function importModelAt(tris, x, z, yaw){
+  CUSTOM_MODELS.push({ tris:tris, x:x, y:0, z:z, yaw:yaw, scale:1,
+    col:pick([[196,150,90],[150,170,190],[180,90,80],[110,150,110],[170,150,200]]) });
+}
+(function setupModelImport(){
+  var input=document.getElementById('modelFile');
+  input.addEventListener('change', function(){
+    var file=input.files[0]; if(!file) return;
+    var reader=new FileReader();
+    reader.onload=function(){
+      var tris;
+      try{ tris=normalizeOBJ(parseOBJ(reader.result)); }
+      catch(e){ toast('Could not read that .obj'); return; }
+      if(!tris.length){ toast('No faces found in that file'); return; }
+      var dropX=camX+Math.sin(camYaw)*2.4, dropZ=camZ+Math.cos(camYaw)*2.4;
+      importModelAt(tris, dropX, dropZ, camYaw+PI);
+      toast('Model dropped in — '+tris.length+' triangles');
+    };
+    reader.readAsText(file);
+    input.value='';
+  });
+})();
 function drawOilStand(){
   var B=basis(0,0,0), o=[OIL_STAND.x,0,OIL_STAND.z];
   drawBox(B,o, 0,0.35,0, 0.22,0.35,0.16, [70,60,50], null);
@@ -3327,6 +3410,7 @@ window.addEventListener('keydown', function(e){
   if(e.code==='KeyQ'){ holster=!holster; if(holster&&pumping) stopPump(); syncBelt(); }
   if(e.code==='KeyG') bgDropBat();
   if(e.code==='KeyY') showReviewLog();
+  if(e.code==='KeyM'){ if(locked) document.exitPointerLock(); document.getElementById('modelFile').click(); }
   for(var i=0;i<TOOLS.length;i++){
     if(e.code==='Digit'+TOOLS[i].key){
       if(!TOOLS[i].owned){ toast(TOOLS[i].id==='bat'
@@ -4558,6 +4642,7 @@ function render(){
     drawRestroomSign();
     drawGull();
     drawBuyer();
+    for(var mI=0;mI<CUSTOM_MODELS.length;mI++) drawCustomModel(CUSTOM_MODELS[mI]);
     for(var i=0;i<CARS.length;i++) drawCar(CARS[i]);
     drawStoreInterior();
     drawWalkers();
