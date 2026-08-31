@@ -336,8 +336,25 @@ function toView(x,y,z){ var dx=x-camX,dy=y-camY,dz=z-camZ;
 var glOpaque=[], glTrans=[];
 var EMIT_NUDGE=0.012;   /* see note by GL_NEAR below */
 var NEARZ=0.18;   /* view-space near-plane clip distance for clipTriNear, just past GL_NEAR */
+/* geometry-capture mode: every draw function in this renderer, from the
+   station down to a single wheel, ultimately calls emitPoly with vertices
+   already placed by whatever basis/origin its caller passed in. Calling one
+   of those functions with an identity basis (yaw/pitch/roll all 0) and a
+   zero origin therefore emits its geometry in the function's own local
+   frame — so instead of teaching every draw function to also produce a
+   triangle soup, this just intercepts the one function they all already
+   funnel through and grabs positions instead of sending them to the GPU.
+   Colour is discarded (voxelized models are one flat colour throughout this
+   renderer anyway), and nothing else — lighting, camera, projection — runs
+   at all while capturing, so it costs nothing during normal play. */
+var VOXCAP_ON=false, VOXCAP_TRIS=[];
 function emitPoly(v3,col,opt){
   var n=v3.length/3; if(n<3) return;
+  if(VOXCAP_ON){
+    for(var vi=1;vi<n-1;vi++)
+      VOXCAP_TRIS.push([v3[0],v3[1],v3[2], v3[vi*3],v3[vi*3+1],v3[vi*3+2], v3[(vi+1)*3],v3[(vi+1)*3+1],v3[(vi+1)*3+2]]);
+    return;
+  }
   var i, nx=0,ny=0,nz=0, cx=0,cy=0,cz=0;
   /* Newell's method: robust even when the leading edge is near-collinear,
      which several callers (carFace, drvFace) rely on. */
@@ -1021,17 +1038,28 @@ function drawCar(c){
       carDisc(B,o, sx*0.62, CAR_WHR*0.72, wz, 0.15, 6,'x', [34,36,42], sx*0.3, 0.3);
       continue;
     }
-    carWheel(B,o, sx*CAR_WHX, CAR_WHR, wz, (c.wheelSpin||0)*(sx<0?-1:1), CAR_TYRE, hub);
+    var wp=ptOf(B,o, sx*CAR_WHX, CAR_WHR, wz);
+    /* a voxelized wheel can't spin — drawSlot only supports a yaw turn, not
+       the roll a rolling wheel needs — so it's a static (if blocky) wheel */
+    if(!drawSlot('carWheel', wp[0], wp[2], c.yaw, 1, wp[1], CAR_WHR))
+      carWheel(B,o, sx*CAR_WHX, CAR_WHR, wz, (c.wheelSpin||0)*(sx<0?-1:1), CAR_TYRE, hub);
   }
 
   /* ── body shell ─────────────────────────────────────────────────────── */
   if(!drawSlot('car', c.x, c.z, c.yaw, 1.4, 0, 0.7)) carHullDraw(B,o, dirty, low, arch);
   drawPoopMarks(c,B,o);
-  if(c.parts.bumper) drawBox(B,o, 0,0.44,-2.09, 0.80,0.09,0.10, chrome, null);
+  if(c.parts.bumper){
+    var bup=ptOf(B,o, 0,0.44,-2.09);
+    if(!drawSlot('carBumper', bup[0], bup[2], c.yaw, 1, bup[1], 0.09))
+      drawBox(B,o, 0,0.44,-2.09, 0.80,0.09,0.10, chrome, null);
+  }
   if(c.hoodOpen){
-    drawBox(B,o, 0,1.05,-1.7, 0.55,0.20,0.35, [40,40,44], null);
+    var hdp=ptOf(B,o, 0,1.05,-1.7);
+    if(!drawSlot('carHood', hdp[0], hdp[2], c.yaw, 1, hdp[1], 0.15)){
+      drawBox(B,o, 0,1.05,-1.7, 0.55,0.20,0.35, [40,40,44], null);
+      drawBox(B,o, -0.25,1.15,-1.7, 0.03,0.15,0.03, [214,170,40], null);
+    }
     if(c.parts.battery) drawBox(B,o, 0.25,1.15,-1.7, 0.14,0.12,0.14, [40,90,60], null);
-    drawBox(B,o, -0.25,1.15,-1.7, 0.03,0.15,0.03, [214,170,40], null);
   }
 
   /* ── greenhouse: pillars, roof and inset glass ──────────────────────── */
@@ -1108,10 +1136,13 @@ function drawCar(c){
   }
   drawBox(B,o, 0, 0.505, -1.988, 0.770, 0.100, 0.070, chrome);
   if(c.parts.plate){
-    carFace(B,o,[[-0.268,0.470,-2.066],[0.268,0.470,-2.066],
-                 [0.268,0.644,-2.066],[-0.268,0.644,-2.066]], CAR_TRIMD, undefined, null, 0.58);
-    carFace(B,o,[[-0.245,0.488,-2.076],[0.245,0.488,-2.076],
-                 [0.245,0.626,-2.076],[-0.245,0.626,-2.076]], CAR_PLATEC, undefined, null, 0.62);
+    var pfp=ptOf(B,o, 0,0.557,-2.071);
+    if(!drawSlot('carPlate', pfp[0], pfp[2], c.yaw, 1, pfp[1], 0.087)){
+      carFace(B,o,[[-0.268,0.470,-2.066],[0.268,0.470,-2.066],
+                   [0.268,0.644,-2.066],[-0.268,0.644,-2.066]], CAR_TRIMD, undefined, null, 0.58);
+      carFace(B,o,[[-0.245,0.488,-2.076],[0.245,0.488,-2.076],
+                   [0.245,0.626,-2.076],[-0.245,0.626,-2.076]], CAR_PLATEC, undefined, null, 0.62);
+    }
   }
 
   /* ── tail: lamp blocks, bumper bar, plate ───────────────────────────── */
@@ -1127,10 +1158,13 @@ function drawCar(c){
   }
   drawBox(B,o, 0, 0.505, 1.988, 0.770, 0.100, 0.070, chrome);
   if(c.parts.plate){
-    carFace(B,o,[[-0.268,0.470,2.066],[0.268,0.470,2.066],
-                 [0.268,0.644,2.066],[-0.268,0.644,2.066]], CAR_TRIMD, undefined, null, 0.58);
-    carFace(B,o,[[-0.245,0.488,2.076],[0.245,0.488,2.076],
-                 [0.245,0.626,2.076],[-0.245,0.626,2.076]], CAR_PLATEC, undefined, null, 0.62);
+    var prp=ptOf(B,o, 0,0.557,2.071);
+    if(!drawSlot('carPlate', prp[0], prp[2], c.yaw, 1, prp[1], 0.087)){
+      carFace(B,o,[[-0.268,0.470,2.066],[0.268,0.470,2.066],
+                   [0.268,0.644,2.066],[-0.268,0.644,2.066]], CAR_TRIMD, undefined, null, 0.58);
+      carFace(B,o,[[-0.245,0.488,2.076],[0.245,0.488,2.076],
+                   [0.245,0.626,2.076],[-0.245,0.626,2.076]], CAR_PLATEC, undefined, null, 0.62);
+    }
   }
 
   /* ── flanks: door shut lines and a handle ───────────────────────────── */
@@ -1150,7 +1184,12 @@ function drawCar(c){
 
   /* ── fuel flap, right flank, over the rear arch ─────────────────────── */
   X = carHullW(1.30);
-  carDisc(B,o, X+0.020, 0.790, 1.30, 0.118, 8, 'x', chrome, 0.3, 0.34);
+  var cpp=ptOf(B,o, X+0.020, 0.790, 1.30);
+  /* only the always-there outer ring is voxelized — the open/closed inner
+     detail (dark hole vs. swung-open flap) stays procedural so that state
+     keeps reading clearly */
+  if(!drawSlot('carCap', cpp[0], cpp[2], c.yaw, 1, cpp[1], 0.118))
+    carDisc(B,o, X+0.020, 0.790, 1.30, 0.118, 8, 'x', chrome, 0.3, 0.34);
   if(c.capOpen){
     carDisc(B,o, X+0.030, 0.790, 1.30, 0.086, 8, 'x', [22,24,28], 0.3, 0.36);
     /* the flap, swung open on its front hinge — drawn from both sides */
@@ -1165,8 +1204,14 @@ function drawCar(c){
   /* ── wing mirrors on stalks ─────────────────────────────────────────── */
   for(s=-1;s<=1;s+=2){
     if(!(s<0 ? c.parts.mirrorL : c.parts.mirrorR)) continue;
-    meshPrismB(B,o, s*0.700, 1.285, -0.78, 0.028, 0.072, 3, 'x', low);
-    drawBox(B,o, s*0.802, 1.300, -0.78, 0.052, 0.062, 0.058, dirty);
+    var mrp=ptOf(B,o, s*0.700, 1.285, -0.78);
+    /* the captured mesh's head offset only reads correctly mirrored on one
+       side — drawSlot has no flip transform, only yaw — so the other side's
+       head sits very slightly off; a few centimetres on a tiny stalk */
+    if(!drawSlot('carMirror', mrp[0], mrp[2], c.yaw, 1, mrp[1], 0.07)){
+      meshPrismB(B,o, s*0.700, 1.285, -0.78, 0.028, 0.072, 3, 'x', low);
+      drawBox(B,o, s*0.802, 1.300, -0.78, 0.052, 0.062, 0.058, dirty);
+    }
     if(closeUp)
       carFace(B,o,[[s*0.856,1.246,-0.830],[s*0.856,1.246,-0.730],
                    [s*0.856,1.354,-0.730],[s*0.856,1.354,-0.830]], [198,220,232],
@@ -2040,7 +2085,11 @@ function toggleRestroom(){
   else toast('Sign comes back down.');
 }
 function drawRestroomSign(){
-  var B=basis(PI/2,0,0), o=[SHOP.x-SHOP.w/2-0.06,0,SHOP.z-2.5];
+  var ox=SHOP.x-SHOP.w/2-0.06, oz=SHOP.z-2.5;
+  /* yaw is 0 here on purpose — the PI/2 turn is baked into the captured
+     mesh already, since it came from calling this function as-is */
+  if(drawSlot('restroomSign', ox, oz, 0, 1, 0, 0.2)) return;
+  var B=basis(PI/2,0,0), o=[ox,0,oz];
   drawBox(B,o, 0,1.38,0, 0.02,0.16,0.24, [244,240,230], null);
   var col = restroomBroken ? [214,58,48] : [90,150,90];
   drawBox(B,o, 0.028,1.38,0, 0.006,0.11,0.17, col, null);
@@ -3019,11 +3068,119 @@ var SLOT_DEFS=[
   { key:'gull',    label:'The seagull' },
   { key:'buyer',   label:'The basement buyer' }
 ];
+/* scale here is the CALLER's role-appropriate default (how big a normalized
+   1.6-unit import should look standing in for this particular thing) — used
+   only when the wired model doesn't carry its own baseScale. A captured
+   voxelization of the game's own geometry always does (computed from its
+   real measured size), which is why every auto-voxelized object reconstructs
+   its true size instead of whatever guess the call site's literal implies. */
 function drawSlot(key, x, z, yaw, scale, y, refY){
   var m=CUSTOM_SLOTS[key]; if(!m) return false;
-  if(m.rig) drawRiggedModel(m, x, y||0, z, (yaw||0)+(m.rot||0), scale*(m.scale||1), refY);
-  else drawModelTris(m.tris, m.col, x, y||0, z, (yaw||0)+(m.rot||0), scale*(m.scale||1), refY);
+  var effScale=(m.baseScale!==undefined?m.baseScale:scale)*(m.scale||1);
+  var effY=(y||0)+(m.baseY||0);
+  if(m.rig) drawRiggedModel(m, x, effY, z, (yaw||0)+(m.rot||0), effScale, refY);
+  else drawModelTris(m.tris, m.col, x, effY, z, (yaw||0)+(m.rot||0), effScale, refY);
   return true;
+}
+/* ── "voxelize everything": wire every slot (the 5 above, plus a handful
+   more added below purely for this) to a voxelized capture of the game's
+   OWN stock geometry, rather than requiring an imported .obj. A capture is
+   just treated exactly like a user's imported file would be — normalized
+   the same way, voxelized the same way, stored in CUSTOM_SLOTS the same
+   way — so every existing consumer (drawSlot, and for the 5 real slots,
+   the adjust sheet and voxel destruction) keeps working unchanged. AUTO_VOX
+   tracks which slot keys THIS system put there, so toggling it off never
+   clobbers something the player wired in by hand afterward. ───────────── */
+var AUTO_VOX={};
+function autoVoxelizeSlot(key, drawFn, res, col, noBaseY){
+  delete CUSTOM_SLOTS[key];             /* so a slot with an internal drawSlot() check (gull/buyer) falls through to its procedural body instead of recursing into whatever used to be wired here */
+  VOXCAP_TRIS=[]; VOXCAP_ON=true;
+  try{ drawFn(); } finally { VOXCAP_ON=false; }
+  if(!VOXCAP_TRIS.length) return false;
+  var minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,minz=1e9,maxz=-1e9,i,k;
+  for(i=0;i<VOXCAP_TRIS.length;i++) for(k=0;k<9;k+=3){
+    var x=VOXCAP_TRIS[i][k],y=VOXCAP_TRIS[i][k+1],z=VOXCAP_TRIS[i][k+2];
+    if(x<minx)minx=x; if(x>maxx)maxx=x;
+    if(y<miny)miny=y; if(y>maxy)maxy=y;
+    if(z<minz)minz=z; if(z>maxz)maxz=z;
+  }
+  var realSpan=Math.max(maxx-minx,maxy-miny,maxz-minz)||1;
+  var tris=normalizeOBJ(VOXCAP_TRIS);
+  var cellSize=1.6/res;
+  var cells=voxelizeMesh(tris,cellSize);
+  if(!Object.keys(cells).length) return false;
+  CUSTOM_SLOTS[key]={ tris:voxelsToTris(cells,cellSize), col:col, scale:1, rot:0,
+    baseScale:realSpan/1.6, baseY:noBaseY?0:miny,
+    origTris:tris, voxelCells:cells, voxelCellSize:cellSize, voxelRes:res, voxelized:true };
+  AUTO_VOX[key]=true;
+  return true;
+}
+var AVX_DRIVER_COL=[224,196,168], AVX_STATION_COL=[224,214,190], AVX_CAR_COL=[190,90,80],
+    AVX_GULL_COL=[240,240,238], AVX_BUYER_COL=[120,96,140], AVX_TRUCK_COL=[236,116,66],
+    AVX_PROP_COL=[150,150,158], AVX_PART_COL=[70,72,80];
+function voxelizeEverything(silent){
+  /* only stnBuilding — the call site gates just the building shell behind
+     this slot, and always draws stnProps() (canopy/pumps/benches/vending
+     machine) unconditionally afterward regardless */
+  autoVoxelizeSlot('station', function(){ stnBuilding(basis(0,0,0)); }, 26, AVX_STATION_COL);
+  autoVoxelizeSlot('car', function(){ carHullDraw(basis(0,0,0), [0,0,0], AVX_CAR_COL, AVX_CAR_COL, AVX_CAR_COL); }, 18, AVX_CAR_COL);
+  /* noBaseY: unlike everything else here, drawDriver's own pose offsets are
+     built relative to a GROUND-level origin (only the seated upper body is
+     drawn, starting well above 0), while its call sites pass a SEAT-height
+     y meant for a model normalized flat to 0 — reconstructing the true
+     ground-relative offset on top of that would double-count it */
+  autoVoxelizeSlot('driver', function(){
+    var fakeC={ x:0,z:0, seed:12345, bob:0, mood:1, angry:0, onFire:0, served:false, impatient:false, fugitive:false, hat:null };
+    drawDriver(fakeC, basis(0,0,0), [0,0,0]);
+  }, 12, AVX_DRIVER_COL, true);
+  (function(){
+    var wasActive=GULL.active, wasSeed=GULL.seed;
+    GULL.active=true; GULL.seed=0;   /* zero yaw during capture — the real call site supplies GULL's current facing on top of this */
+    autoVoxelizeSlot('gull', drawGull, 8, AVX_GULL_COL, true);   /* same reasoning as driver: its call site's y IS the whole position (incl. the hop bounce), not a simple ground constant */
+    GULL.active=wasActive; GULL.seed=wasSeed;
+  })();
+  (function(){
+    var was=buyerHere; buyerHere=true;
+    autoVoxelizeSlot('buyer', drawBuyer, 12, AVX_BUYER_COL);
+    buyerHere=was;
+  })();
+  autoVoxelizeSlot('truck', function(){ drawTruckBody([0,0,0]); }, 18, AVX_TRUCK_COL);
+  autoVoxelizeSlot('oilStand', drawOilStand, 10, AVX_PROP_COL);
+  autoVoxelizeSlot('squeegeeStand', drawSqueegeeStand, 10, AVX_PROP_COL);
+  autoVoxelizeSlot('restroomSign', drawRestroomSign, 8, AVX_PROP_COL);
+  /* the small parts of a car a player actually reaches for — wheel, mirror,
+     fuel cap, bumper, hood assembly, plate — captured from the exact same
+     geometry drawCar() itself falls back to, at the same local offset, so
+     hotspot positions never move, only the mesh under them does */
+  autoVoxelizeSlot('carWheel', function(){ carWheel(basis(0,0,0),[0,0,0], 0,0,0, 0, AVX_PART_COL, AVX_PART_COL); }, 10, AVX_PART_COL);
+  autoVoxelizeSlot('carMirror', function(){
+    var B=basis(0,0,0), o=[0,0,0];
+    meshPrismB(B,o, 0,0,0, 0.028,0.072,3,'x', AVX_PART_COL);
+    drawBox(B,o, 0.102,0.015,0, 0.052,0.062,0.058, AVX_PART_COL);
+  }, 8, AVX_PART_COL);
+  autoVoxelizeSlot('carCap', function(){
+    var B=basis(0,0,0), o=[0,0,0];
+    carDisc(B,o, 0,0,0, 0.118, 8, 'x', AVX_PART_COL, 0.3, 0.34);
+  }, 8, AVX_PART_COL);
+  autoVoxelizeSlot('carBumper', function(){
+    drawBox(basis(0,0,0),[0,0,0], 0,0,0, 0.80,0.09,0.10, AVX_PART_COL);
+  }, 10, AVX_PART_COL);
+  /* battery deliberately excluded — it needs to keep disappearing/reappearing
+     on its own when stolen, so it stays a separate, always-procedural box */
+  autoVoxelizeSlot('carHood', function(){
+    var B=basis(0,0,0), o=[0,0,0];
+    drawBox(B,o, 0,0,0, 0.55,0.20,0.35, AVX_PART_COL);
+    drawBox(B,o, -0.25,0.10,0, 0.03,0.15,0.03, AVX_PART_COL);
+  }, 12, AVX_PART_COL);
+  autoVoxelizeSlot('carPlate', function(){
+    carFace(basis(0,0,0),[0,0,0],[[-0.268,-0.017,0],[0.268,-0.017,0],[0.268,0.157,0],[-0.268,0.157,0]], AVX_PART_COL, undefined, null, 0.58);
+  }, 8, AVX_PART_COL);
+  if(!silent) toast('Everything, voxelized.');
+}
+function unvoxelizeEverything(){
+  var keys=Object.keys(AUTO_VOX);
+  for(var i=0;i<keys.length;i++){ delete CUSTOM_SLOTS[keys[i]]; delete AUTO_VOX[keys[i]]; }
+  toast('Back to the smooth look.');
 }
 /* one flat colour per model — there is no texture pipeline here, so
    "painting" just means picking which solid colour every face gets lit as */
@@ -3118,7 +3275,7 @@ function openSlotAdjust(key, label){
     { rule:true }
   ].concat(m.rig ? rigOpts(m, reopen) : voxelizeOpts(m, reopen)).concat([
     { rule:true },
-    { t:'Revert to the original look', fn:function(){ delete CUSTOM_SLOTS[key]; closeSheet(); toast(label+' back to normal.'); } },
+    { t:'Revert to the original look', fn:function(){ delete CUSTOM_SLOTS[key]; delete AUTO_VOX[key]; closeSheet(); toast(label+' back to normal.'); } },
     { t:'Done', fn:closeSheet }
   ]);
   showSheet('Adjust: '+label, modelAdjustSub(m), opts);
@@ -3145,6 +3302,7 @@ function chooseModelDestination(payload){
             var m={ tris:tris, col:col, scale:1, rot:0 };
             if(rig){ m.rig=rig; m.clipIndex=rig.pendingClip; m.animSpeed=1; }
             CUSTOM_SLOTS[def.key]=m;
+            delete AUTO_VOX[def.key];   /* now user-owned — voxelizeEverything()'s toggle must never touch it */
             openSlotAdjust(def.key, def.label);
           });
         } });
@@ -3201,6 +3359,7 @@ function handleGLB(buf){
   });
 })();
 function drawOilStand(){
+  if(drawSlot('oilStand', OIL_STAND.x, OIL_STAND.z, 0, 1, 0, 0.3)) return;
   var B=basis(0,0,0), o=[OIL_STAND.x,0,OIL_STAND.z];
   drawBox(B,o, 0,0.35,0, 0.22,0.35,0.16, [70,60,50], null);
   drawBox(B,o, -0.06,0.75,0, 0.05,0.10,0.05, [214,170,40], null);
@@ -3208,6 +3367,7 @@ function drawOilStand(){
   drawBox(B,o, 0,0.86,0, 0.20,0.03,0.14, [60,60,64], null);
 }
 function drawSqueegeeStand(){
+  if(drawSlot('squeegeeStand', SQUEEGEE_STAND.x, SQUEEGEE_STAND.z, 0, 1, 0, 0.4)) return;
   var B=basis(0,0,0), o=[SQUEEGEE_STAND.x,0,SQUEEGEE_STAND.z];
   drawBox(B,o, 0,0.30,0, 0.16,0.30,0.16, [70,90,120], null);
   drawBox(B,o, 0,0.75,0.02, 0.03,0.45,0.02, [200,204,210], null);
@@ -3574,7 +3734,39 @@ function updateTruck(dt){
 }
 function drawTruck(){
   if(!truck.here) return;
-  var B=basis(-PI/2,0,0), o=[truck.x,0,truck.z];
+  var o=[truck.x,0,truck.z];
+  /* yaw is 0 here on purpose — the -PI/2 turn is already baked into the
+     captured mesh, since it came from calling this function as-is. Only
+     the body itself is a candidate for the slot swap — the crates and the
+     "TOOL DELIVERY" sprite below aren't part of the truck's own shape and
+     always draw regardless of which body is showing. */
+  if(!drawSlot('truck', truck.x, truck.z, 0, 1, 0, 1.4)) drawTruckBody(o);
+
+  /* ── open tailgate crates, so it reads as a delivery in progress ── */
+  if(truck.stay>0){
+    setAO(0,0.9);
+    var cw=[[3.55,0.30,0.34],[3.95,0.26,-0.30],[3.62,0.24,-0.86]];
+    for(var q=0;q<cw.length;q++){
+      var Bc=basis(-PI/2+ (q-1)*0.4,0,0);
+      drawBox(Bc,o, cw[q][2], cw[q][1], cw[q][0], 0.30, cw[q][1], 0.30, [206,158,102]);
+      drawBox(Bc,o, cw[q][2], cw[q][1]*2-0.03, cw[q][0], 0.31, 0.03, 0.31, [184,136,84]);
+    }
+    clearAO();
+  }
+
+  sprite(truck.x, 2.90, truck.z, function(sx,sy,sc){
+    if(sc<16) return;
+    octx.save();
+    octx.font='bold '+(sc*0.11|0)+'px "Baloo 2",sans-serif';
+    octx.textAlign='center'; octx.lineJoin='round';
+    octx.lineWidth=sc*0.030; octx.strokeStyle='rgba(255,255,255,0.92)';
+    octx.strokeText('TOOL DELIVERY', sx, sy);
+    octx.fillStyle='#d94f36'; octx.fillText('TOOL DELIVERY', sx, sy);
+    octx.restore(); octx.textAlign='left';
+  },-1);
+}
+function drawTruckBody(o){
+  var B=basis(-PI/2,0,0);
   var ORANGE=[236,116,66], ORANGE_D=[206,86,48], CREAM=[248,240,220], TRIM=[62,72,86];
   setAO(0,2.6);
 
@@ -3623,29 +3815,6 @@ function drawTruck(){
   /* exhaust stack behind the cab */
   meshPrismB(B,o, 0.98, 1.90, -1.10, 0.07, 0.62, 7,'y', [148,152,160], [96,100,110]);
   clearAO();
-
-  /* ── open tailgate crates, so it reads as a delivery in progress ── */
-  if(truck.stay>0){
-    setAO(0,0.9);
-    var cw=[[3.55,0.30,0.34],[3.95,0.26,-0.30],[3.62,0.24,-0.86]];
-    for(var q=0;q<cw.length;q++){
-      var Bc=basis(-PI/2+ (q-1)*0.4,0,0);
-      drawBox(Bc,o, cw[q][2], cw[q][1], cw[q][0], 0.30, cw[q][1], 0.30, [206,158,102]);
-      drawBox(Bc,o, cw[q][2], cw[q][1]*2-0.03, cw[q][0], 0.31, 0.03, 0.31, [184,136,84]);
-    }
-    clearAO();
-  }
-
-  sprite(truck.x, 2.90, truck.z, function(sx,sy,sc){
-    if(sc<16) return;
-    octx.save();
-    octx.font='bold '+(sc*0.11|0)+'px "Baloo 2",sans-serif';
-    octx.textAlign='center'; octx.lineJoin='round';
-    octx.lineWidth=sc*0.030; octx.strokeStyle='rgba(255,255,255,0.92)';
-    octx.strokeText('TOOL DELIVERY', sx, sy);
-    octx.fillStyle='#d94f36'; octx.fillText('TOOL DELIVERY', sx, sy);
-    octx.restore(); octx.textAlign='left';
-  },-1);
 }
 function openTruck(){
   var opts=[];
@@ -4254,6 +4423,7 @@ window.addEventListener('keydown', function(e){
   if(e.code==='KeyG') bgDropBat();
   if(e.code==='KeyY') showReviewLog();
   if(e.code==='KeyM'){ if(locked) document.exitPointerLock(); document.getElementById('modelFile').click(); }
+  if(e.code==='KeyV'){ if(Object.keys(AUTO_VOX).length) unvoxelizeEverything(); else voxelizeEverything(); }
   for(var i=0;i<TOOLS.length;i++){
     if(e.code==='Digit'+TOOLS[i].key){
       if(!TOOLS[i].owned){ toast(TOOLS[i].id==='bat'
@@ -5562,6 +5732,7 @@ function init(){
   buildScenery();
   camX=1.2; camZ=3.0; camYaw=-2.4;
   syncBelt(); syncHUD(); syncOrder();
+  voxelizeEverything(true);   /* the default look now — press V any time to toggle it off */
   requestAnimationFrame(frame);
 }
 document.getElementById('go').onclick = function(){
