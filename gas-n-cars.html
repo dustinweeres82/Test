@@ -166,7 +166,7 @@
 <canvas id="c"></canvas>
 <canvas id="ov"></canvas>
 <div id="hurtFlash"></div>
-<input type="file" id="modelFile" accept=".obj,.glb" style="display:none">
+<input type="file" id="modelFile" accept=".obj,.glb,.vox" style="display:none">
 
 <div id="hud">
   <div id="wallet" class="card"><span id="cash">$0</span>
@@ -2749,7 +2749,7 @@ function drawRiggedModel(m, x,y,z,yaw,scale,refY){
 /* shared low-level draw: a triangle soup, one flat colour, positioned/scaled/
    rotated on demand — everything below (loose drops and wired slots alike)
    goes through this one path */
-function drawModelTris(tris, col, x, y, z, yaw, scale, refY){
+function drawModelTris(tris, col, x, y, z, yaw, scale, refY, triCols){
   var B=basis(yaw||0,0,0), o=[x,y||0,z], v=[];
   for(var i=0;i<tris.length;i++){
     var t=tris[i]; v.length=0;
@@ -2757,12 +2757,12 @@ function drawModelTris(tris, col, x, y, z, yaw, scale, refY){
       var p=ptOf(B,o, t[k]*scale, t[k+1]*scale, t[k+2]*scale);
       v.push(p[0],p[1],p[2]);
     }
-    emitFaceC(v, col, x, y+(refY!==undefined?refY:0.6*scale), z);
+    emitFaceC(v, triCols?triCols[i]:col, x, y+(refY!==undefined?refY:0.6*scale), z);
   }
 }
 function drawCustomModel(m){
   if(m.rig) drawRiggedModel(m, m.x, m.y, m.z, m.yaw, m.scale);
-  else drawModelTris(m.tris, m.col, m.x, m.y, m.z, m.yaw, m.scale);
+  else drawModelTris(m.tris, m.col, m.x, m.y, m.z, m.yaw, m.scale, undefined, m.triCols);
 }
 /* ── voxelize: sample the mesh's surface onto a grid, then re-emit only the
    cube faces that actually border empty space. A face between two solid
@@ -2821,6 +2821,33 @@ function voxelsToTris(cells, cellSize){
   }
   return tris;
 }
+/* the multi-colour twin of voxelsToTris — used only for .vox imports, whose
+   cells store a palette index (1-255, always truthy so every existing
+   truthiness check on a cell still works) instead of a bare `true`. Kept as
+   a fully separate function rather than folding a colour branch into the
+   single-colour one above, so every existing single-colour caller — tested
+   extensively already this session — stays completely untouched. */
+function voxelsToTrisColored(cells, cellSize, palette){
+  var tris=[], cols=[];
+  for(var key in cells){
+    var p=key.split(',');
+    var cx=+p[0], cy=+p[1], cz=+p[2];
+    var rgba=palette[cells[key]-1]||[190,170,140,255];
+    var rgb=[rgba[0],rgba[1],rgba[2]];
+    for(var d=0;d<6;d++){
+      var dir=VOX_DIRS[d];
+      var nk=(cx+dir.d[0])+','+(cy+dir.d[1])+','+(cz+dir.d[2]);
+      if(cells[nk]) continue;
+      var c=dir.c, q=[];
+      for(var k=0;k<4;k++) q.push([(cx+c[k][0])*cellSize,(cy+c[k][1])*cellSize,(cz+c[k][2])*cellSize]);
+      tris.push([q[0][0],q[0][1],q[0][2], q[1][0],q[1][1],q[1][2], q[2][0],q[2][1],q[2][2]]);
+      cols.push(rgb);
+      tris.push([q[0][0],q[0][1],q[0][2], q[2][0],q[2][1],q[2][2], q[3][0],q[3][1],q[3][2]]);
+      cols.push(rgb);
+    }
+  }
+  return { tris:tris, cols:cols };
+}
 function voxelizeModel(m, res){
   var src=m.origTris||m.tris;
   var minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,minz=1e9,maxz=-1e9,i,k;
@@ -2846,7 +2873,14 @@ function voxelizeModel(m, res){
 function unvoxelizeModel(m){
   if(m.origTris){ m.tris=m.origTris; m.voxelized=false; m.voxelCells=null; m.voxelCellSize=null; m.onFire=false; m.fireFrontier=null; m.fireSeen=null; }
 }
-function remeshVoxels(m){ m.tris=voxelsToTris(m.voxelCells, m.voxelCellSize); }
+function remeshVoxels(m){
+  if(m.palette){
+    var built=voxelsToTrisColored(m.voxelCells, m.voxelCellSize, m.palette);
+    m.tris=built.tris; m.triCols=built.cols;
+  } else {
+    m.tris=voxelsToTris(m.voxelCells, m.voxelCellSize);
+  }
+}
 /* ── destructible voxels: a crowbar or a gunshot knocks individual cubes out
    of the live cell grid a voxelized model is built from, and fire spreads
    through it one connected cube at a time. Everything downstream (the mesh,
@@ -2913,14 +2947,24 @@ function voxelChipFX(wp, col){
    prop, or reverts a slot to its original look (delete CUSTOM_SLOTS[key])
    for a wired one — the caller decides which, and supplies the matching
    emptyMsg since "nothing left of it" reads differently for each */
+/* multi-colour (.vox) models store a palette index per cell instead of a
+   bare `true` — chip debris can use that cell's actual colour instead of
+   always falling back to the model's single flat colour */
+function voxelCellColor(m, cx, cy, cz){
+  if(!m.palette) return m.col||[190,170,140];
+  var idx=m.voxelCells[cx+','+cy+','+cz];
+  var rgba=idx && m.palette[idx-1]; return rgba ? [rgba[0],rgba[1],rgba[2]] : (m.col||[190,170,140]);
+}
 function knockVoxel(m, voxel, radius, chaosAmt, place, remove, emptyMsg){
+  var chipCol=voxelCellColor(m, voxel.cx, voxel.cy, voxel.cz);
   var removed=removeVoxelCell(m, voxel.cx, voxel.cy, voxel.cz), wp=voxelWorldPos(place, m.voxelCellSize, voxel);
-  if(removed) voxelChipFX(wp, m.col);
+  if(removed) voxelChipFX(wp, chipCol);
   if(radius>1){
     var nbrs=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
     for(var i=0;i<nbrs.length;i++){
       var nx=voxel.cx+nbrs[i][0], ny=voxel.cy+nbrs[i][1], nz=voxel.cz+nbrs[i][2];
-      if(removeVoxelCell(m,nx,ny,nz)){ removed=true; voxelChipFX(voxelWorldPos(place, m.voxelCellSize, {cx:nx,cy:ny,cz:nz}), m.col); }
+      var nCol=voxelCellColor(m, nx, ny, nz);
+      if(removeVoxelCell(m,nx,ny,nz)){ removed=true; voxelChipFX(voxelWorldPos(place, m.voxelCellSize, {cx:nx,cy:ny,cz:nz}), nCol); }
     }
   }
   if(!removed) return;
@@ -3079,7 +3123,7 @@ function drawSlot(key, x, z, yaw, scale, y, refY){
   var effScale=(m.baseScale!==undefined?m.baseScale:scale)*(m.scale||1);
   var effY=(y||0)+(m.baseY||0);
   if(m.rig) drawRiggedModel(m, x, effY, z, (yaw||0)+(m.rot||0), effScale, refY);
-  else drawModelTris(m.tris, m.col, x, effY, z, (yaw||0)+(m.rot||0), effScale, refY);
+  else drawModelTris(m.tris, m.col, x, effY, z, (yaw||0)+(m.rot||0), effScale, refY, m.triCols);
   return true;
 }
 /* ── "voxelize everything": wire every slot (the 5 above, plus a handful
@@ -3219,7 +3263,56 @@ function modelAdjustSub(m){
     var clipName=(m.clipIndex!=null && m.rig.anims[m.clipIndex]) ? m.rig.anims[m.clipIndex].name : 'bind pose (no animation)';
     return 'Rigged &middot; '+clipName+' &middot; Scale &times;'+(m.scale||1).toFixed(2);
   }
+  if(m.isVoxImport) return 'Multicoloured &middot; Scale &times;'+(m.scale||1).toFixed(2)+' &middot; '+m.tris.length+' triangles';
   return (m.voxelized?'Voxelized &middot; ':'')+'Scale &times;'+(m.scale||1).toFixed(2)+' &middot; '+m.tris.length+' triangles';
+}
+/* ── recolouring a native .vox import: since it arrives with a real palette
+   (not this renderer's usual one-flat-colour-per-model), "Repaint" doesn't
+   apply — instead these apply a colour transform to every palette entry at
+   once and re-mesh, the same way real voxel-art tools do a palette swap.
+   No attempt to guess which entries are "skin" vs "shirt" from an unlabelled
+   grid — these are generic, so they read reasonably on anything. */
+function clampRGBA(c){ return [clamp(c[0]|0,0,255), clamp(c[1]|0,0,255), clamp(c[2]|0,0,255), c[3]===undefined?255:c[3]]; }
+function rgbToHsl(r,g,b){
+  r/=255; g/=255; b/=255;
+  var max=Math.max(r,g,b), min=Math.min(r,g,b), h=0, s=0, l=(max+min)/2;
+  if(max!==min){
+    var d=max-min; s=l>0.5?d/(2-max-min):d/(max+min);
+    if(max===r) h=(g-b)/d+(g<b?6:0);
+    else if(max===g) h=(b-r)/d+2;
+    else h=(r-g)/d+4;
+    h/=6;
+  }
+  return [h,s,l];
+}
+function hslToRgb(h,s,l){
+  if(s===0) return [l*255,l*255,l*255];
+  function hue2rgb(p,q,t){ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6)return p+(q-p)*6*t; if(t<0.5)return q; if(t<2/3)return p+(q-p)*(2/3-t)*6; return p; }
+  var q=l<0.5?l*(1+s):l+s-l*s, p=2*l-q;
+  return [hue2rgb(p,q,h+1/3)*255, hue2rgb(p,q,h)*255, hue2rgb(p,q,h-1/3)*255];
+}
+function hueShiftRGB(c, dh){
+  var hsl=rgbToHsl(c[0],c[1],c[2]), rgb=hslToRgb((hsl[0]+dh+1)%1, hsl[1], hsl[2]);
+  return [rgb[0],rgb[1],rgb[2],c[3]];
+}
+function applyPaletteTransform(m, fn){
+  m.palette = m.origPalette.map(function(c){ return clampRGBA(fn(c)); });
+  remeshVoxels(m);
+}
+function voxRecolorOpts(m, reopen){
+  var presets=[
+    { t:'Warm tint', fn:function(c){ return [c[0]*1.15, c[1]*0.95, c[2]*0.78, c[3]]; } },
+    { t:'Cool tint', fn:function(c){ return [c[0]*0.82, c[1]*0.95, c[2]*1.22, c[3]]; } },
+    { t:'Grayscale', fn:function(c){ var g=c[0]*0.3+c[1]*0.59+c[2]*0.11; return [g,g,g,c[3]]; } },
+    { t:'Invert', fn:function(c){ return [255-c[0],255-c[1],255-c[2],c[3]]; } },
+    { t:'Random shuffle', right:'&#127922;', fn:function(c){ return hueShiftRGB(c, Math.random()); } },
+    { t:'Original colours', fn:function(c){ return c; } }
+  ];
+  var opts=[];
+  for(var i=0;i<presets.length;i++){
+    (function(p){ opts.push({ t:p.t, right:p.right, fn:function(){ applyPaletteTransform(m, p.fn); reopen(); } }); })(presets[i]);
+  }
+  return opts;
 }
 /* a rigged import's geometry changes every frame, so voxelizing it isn't
    supported — instead offer clip/speed controls in its place */
@@ -3243,15 +3336,17 @@ function rigOpts(m, reopen){
 }
 function openModelAdjust(m){
   var reopen=function(){ openModelAdjust(m); };
-  var opts=[
-    { t:'Repaint', fn:function(){
-        pickModelColor('Flat-shaded only — one solid colour for the whole model.',
-          function(col){ m.col=col; closeSheet(); reopen(); }); } },
+  var opts=[];
+  if(!m.isVoxImport) opts.push({ t:'Repaint', fn:function(){
+      pickModelColor('Flat-shaded only — one solid colour for the whole model.',
+        function(col){ m.col=col; closeSheet(); reopen(); }); } });
+  opts.push(
     { t:'Rotate 45°', fn:function(){ m.yaw+=PI/4; reopen(); } },
     { t:'Scale up', right:'&times;1.15', fn:function(){ m.scale=Math.min(8,m.scale*1.15); reopen(); } },
     { t:'Scale down', right:'&times;0.87', fn:function(){ m.scale=Math.max(0.1,m.scale/1.15); reopen(); } },
     { rule:true }
-  ].concat(m.rig ? rigOpts(m, reopen) : voxelizeOpts(m, reopen)).concat([
+  );
+  opts=opts.concat(m.rig ? rigOpts(m, reopen) : (m.isVoxImport ? voxRecolorOpts(m, reopen) : voxelizeOpts(m, reopen))).concat([
     { rule:true },
     { t:'Remove it', fn:function(){
         var idx=CUSTOM_MODELS.indexOf(m); if(idx>=0) CUSTOM_MODELS.splice(idx,1);
@@ -3265,15 +3360,17 @@ function openModelAdjust(m){
 function openSlotAdjust(key, label){
   var m=CUSTOM_SLOTS[key];
   var reopen=function(){ openSlotAdjust(key,label); };
-  var opts=[
-    { t:'Repaint', fn:function(){
-        pickModelColor('Flat-shaded only — one solid colour for the whole model.',
-          function(col){ m.col=col; closeSheet(); reopen(); }); } },
+  var opts=[];
+  if(!m.isVoxImport) opts.push({ t:'Repaint', fn:function(){
+      pickModelColor('Flat-shaded only — one solid colour for the whole model.',
+        function(col){ m.col=col; closeSheet(); reopen(); }); } });
+  opts.push(
     { t:'Rotate 45°', fn:function(){ m.rot=(m.rot||0)+PI/4; reopen(); } },
     { t:'Scale up', right:'&times;1.15', fn:function(){ m.scale=Math.min(4,(m.scale||1)*1.15); reopen(); } },
     { t:'Scale down', right:'&times;0.87', fn:function(){ m.scale=Math.max(0.1,(m.scale||1)/1.15); reopen(); } },
     { rule:true }
-  ].concat(m.rig ? rigOpts(m, reopen) : voxelizeOpts(m, reopen)).concat([
+  );
+  opts=opts.concat(m.rig ? rigOpts(m, reopen) : (m.isVoxImport ? voxRecolorOpts(m, reopen) : voxelizeOpts(m, reopen))).concat([
     { rule:true },
     { t:'Revert to the original look', fn:function(){ delete CUSTOM_SLOTS[key]; delete AUTO_VOX[key]; closeSheet(); toast(label+' back to normal.'); } },
     { t:'Done', fn:closeSheet }
@@ -3281,37 +3378,42 @@ function openSlotAdjust(key, label){
   showSheet('Adjust: '+label, modelAdjustSub(m), opts);
 }
 function chooseModelDestination(payload){
-  var tris=payload.tris, rig=payload.rig;
+  var tris=payload.tris, rig=payload.rig, vox=payload.vox;
   var opts=[
     { t:'Just drop it in the world', d:'Loose prop, right where you are standing. Adjust it any time by walking up and pressing E.',
       fn:function(){
-        pickModelColor('Flat-shaded only — one solid colour for the whole model.', function(col){
+        function place(col){
           closeSheet();
           var dropX=camX+Math.sin(camYaw)*2.4, dropZ=camZ+Math.cos(camYaw)*2.4;
-          importModelAt(tris, dropX, dropZ, camYaw+PI, col, rig);
+          if(vox){ vox.x=dropX; vox.y=0; vox.z=dropZ; vox.yaw=camYaw+PI; CUSTOM_MODELS.push(vox); }
+          else importModelAt(tris, dropX, dropZ, camYaw+PI, col, rig);
           openModelAdjust(CUSTOM_MODELS[CUSTOM_MODELS.length-1]);
-        });
+        }
+        if(vox) place(); else pickModelColor('Flat-shaded only — one solid colour for the whole model.', place);
       } }
   ];
   for(var i=0;i<SLOT_DEFS.length;i++){
     (function(def){
       opts.push({ t:'Replace: '+def.label, d:'Every place the game draws this uses your model instead.',
         fn:function(){
-          pickModelColor('Flat-shaded only — one solid colour for the whole model.', function(col){
+          function wire(col){
             closeSheet();
-            var m={ tris:tris, col:col, scale:1, rot:0 };
-            if(rig){ m.rig=rig; m.clipIndex=rig.pendingClip; m.animSpeed=1; }
+            var m;
+            if(vox) m=vox;
+            else { m={ tris:tris, col:col, scale:1, rot:0 }; if(rig){ m.rig=rig; m.clipIndex=rig.pendingClip; m.animSpeed=1; } }
             CUSTOM_SLOTS[def.key]=m;
             delete AUTO_VOX[def.key];   /* now user-owned — voxelizeEverything()'s toggle must never touch it */
             openSlotAdjust(def.key, def.label);
-          });
+          }
+          if(vox) wire(); else pickModelColor('Flat-shaded only — one solid colour for the whole model.', wire);
         } });
     })(SLOT_DEFS[i]);
   }
   opts.push({ rule:true });
   opts.push({ t:'Never mind', fn:closeSheet });
+  var triCount = vox ? vox.tris.length : tris.length;
   showSheet('Use this model for...',
-    (rig?'Rigged &middot; ':'')+tris.length+' triangles imported'+(rig?(' &middot; '+rig.anims.length+' animation'+(rig.anims.length===1?'':'s')):''),
+    (vox?'Multicoloured &middot; ':(rig?'Rigged &middot; ':''))+triCount+' triangles imported'+(rig?(' &middot; '+rig.anims.length+' animation'+(rig.anims.length===1?'':'s')):''),
     opts);
 }
 function pickRigClip(rig, done){
@@ -3331,6 +3433,79 @@ function handleGLB(buf){
   if(rig.anims.length>1) pickRigClip(rig, function(){ chooseModelDestination(payload); });
   else { rig.pendingClip=rig.anims.length===1?0:null; chooseModelDestination(payload); }
 }
+/* ── bring-your-own multi-colour voxel art (.vox): MagicaVoxel's own binary
+   format is already a grid of coloured cubes with a 256-entry palette — no
+   mesh, no surface sampling, no colour loss, unlike turning an arbitrary
+   triangle mesh into voxels. Only the first model in the file is used (no
+   scene graph, no materials); if the file has no RGBA chunk of its own, a
+   synthetic rainbow palette stands in so something still renders. */
+function parseVOX(buf){
+  var dv=new DataView(buf), pos=0;
+  function id4(){ var s=String.fromCharCode(dv.getUint8(pos),dv.getUint8(pos+1),dv.getUint8(pos+2),dv.getUint8(pos+3)); pos+=4; return s; }
+  function u32(){ var v=dv.getUint32(pos,true); pos+=4; return v; }
+  if(id4()!=='VOX ') throw new Error('not a .vox file');
+  u32();  // version
+  if(id4()!=='MAIN') throw new Error('missing MAIN chunk');
+  var mainContentSize=u32(), mainChildrenSize=u32();
+  pos+=mainContentSize;
+  var end=pos+mainChildrenSize;
+  var models=[], palette=null, pendingSize=null;
+  while(pos<end){
+    var cid=id4(), csize=u32(), childSize=u32();
+    var contentEnd=pos+csize;
+    if(cid==='SIZE'){
+      pendingSize=[dv.getUint32(pos,true), dv.getUint32(pos+4,true), dv.getUint32(pos+8,true)];
+    } else if(cid==='XYZI'){
+      var n=dv.getUint32(pos,true), voxels=new Array(n), vp=pos+4;
+      for(var i=0;i<n;i++){ voxels[i]=[dv.getUint8(vp),dv.getUint8(vp+1),dv.getUint8(vp+2),dv.getUint8(vp+3)]; vp+=4; }
+      models.push({ size:pendingSize||[0,0,0], voxels:voxels });
+      pendingSize=null;
+    } else if(cid==='RGBA'){
+      palette=new Array(256);
+      for(var i2=0;i2<256;i2++){ var pp=pos+i2*4; palette[i2]=[dv.getUint8(pp),dv.getUint8(pp+1),dv.getUint8(pp+2),dv.getUint8(pp+3)]; }
+    }
+    pos=contentEnd+childSize;
+  }
+  if(!models.length) throw new Error('no voxel models found');
+  return { model:models[0], palette:palette||VOX_DEFAULT_PALETTE };
+}
+var VOX_DEFAULT_PALETTE=(function(){
+  var pal=[];
+  for(var i=0;i<256;i++){
+    var rgb=hslToRgb(((i*47)%360)/360, 0.55, (30+((i*13)%55))/100);
+    pal.push([rgb[0],rgb[1],rgb[2],255]);
+  }
+  return pal;
+})();
+/* MagicaVoxel authors in a Z-up space; this engine is Y-up, so every voxel's
+   stored (x,y,z) becomes (x,z,y) here. Centres x/z and floors y, the same
+   convention normalizeOBJ uses for triangle imports. */
+function voxModelToSlotData(parsed){
+  var raw=parsed.model.voxels, palette=parsed.palette;
+  var minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,minz=1e9,maxz=-1e9,i;
+  for(i=0;i<raw.length;i++){
+    var gx=raw[i][0], gy=raw[i][2], gz=raw[i][1];
+    if(gx<minx)minx=gx; if(gx>maxx)maxx=gx;
+    if(gy<miny)miny=gy; if(gy>maxy)maxy=gy;
+    if(gz<minz)minz=gz; if(gz>maxz)maxz=gz;
+  }
+  var cx0=Math.round((minx+maxx)/2), cz0=Math.round((minz+maxz)/2);
+  var span=Math.max(maxx-minx+1, maxy-miny+1, maxz-minz+1)||1;
+  var cellSize=1.6/span;
+  var cells={};
+  for(i=0;i<raw.length;i++){
+    var v=raw[i], ci=v[3]; if(ci<=0) continue;
+    cells[(v[0]-cx0)+','+(v[2]-miny)+','+(v[1]-cz0)]=ci;
+  }
+  var built=voxelsToTrisColored(cells, cellSize, palette);
+  return { tris:built.tris, triCols:built.cols, scale:1, rot:0,
+    voxelCells:cells, voxelCellSize:cellSize, voxelized:true,
+    palette:palette, origPalette:palette.slice(), isVoxImport:true };
+}
+function handleVOX(buf){
+  var data=voxModelToSlotData(parseVOX(buf));
+  chooseModelDestination({ vox:data });
+}
 (function setupModelImport(){
   var input=document.getElementById('modelFile');
   input.addEventListener('change', function(){
@@ -3341,6 +3516,12 @@ function handleGLB(buf){
       reader.onload=function(){
         try{ handleGLB(reader.result); }
         catch(e){ toast('Could not read that .glb — '+e.message); }
+      };
+      reader.readAsArrayBuffer(file);
+    } else if(name.endsWith('.vox')){
+      reader.onload=function(){
+        try{ handleVOX(reader.result); }
+        catch(e){ toast('Could not read that .vox — '+e.message); }
       };
       reader.readAsArrayBuffer(file);
     } else if(name.endsWith('.gltf')){
