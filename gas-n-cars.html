@@ -107,7 +107,7 @@
   #wanted h4 { font-family:'Baloo 2'; font-weight:800; font-size:14px; letter-spacing:2px;
                color:var(--red); text-align:center; margin-bottom:6px; }
   #wanted .line { font-size:12.5px; line-height:1.6; }
-  #wanted .swatch { display:inline-block; width:13px; height:13px; border-radius:4px;
+  #wanted .swatch, .opt .swatch { display:inline-block; width:13px; height:13px; border-radius:4px;
                     vertical-align:-2px; border:2px solid #fff; box-shadow:0 0 0 1px #c3cdd6; }
   #wanted .fee { margin-top:7px; font-family:'Baloo 2'; font-weight:800; color:var(--green); }
   #ball { left:16px; bottom:96px; width:214px; padding:12px 14px; display:none; }
@@ -1523,6 +1523,10 @@ function allHotspots(){
   out.push({ kind:'basementDoor', x:INT.x+ROOM_HX-1.9, y:1.2, z:INT.z+ROOM_HZ-0.6, r:0.6 });
   out.push({ kind:'register', x:REGISTER.x, y:1.1, z:REGISTER.z, r:0.7 });
   out.push({ kind:'oilCan', x:OIL_STAND.x, y:0.8, z:OIL_STAND.z, r:0.5 });
+  for(i=0;i<CUSTOM_MODELS.length;i++){
+    var cm=CUSTOM_MODELS[i];
+    out.push({ kind:'customModel', model:cm, x:cm.x, y:cm.y+0.6*cm.scale, z:cm.z, r:1.0*cm.scale });
+  }
   if(buyerHere) out.push({ kind:'buyer', x:BUYER_SPOT.x, y:1.3, z:BUYER_SPOT.z, r:0.6 });
   for(i=0;i<CARS.length;i++) if(CARS[i].state==='waiting') carHotspots(CARS[i], out);
   for(i=0;i<PUMPS.length;i++){
@@ -1579,6 +1583,7 @@ function actionFor(h){
     return { t:'Take the payment' };
   }
   if(h.kind==='oilCan') return heldOil ? null : { t:'Grab a quart of oil' };
+  if(h.kind==='customModel') return { t:'Repaint it' };
   if(h.kind==='candyShelf') return { t:'Rearrange every shelf', bad:true };
   if(h.kind==='hotdogRoller') return { t:'Sneeze in the roller', bad:true };
   if(h.kind==='slushee') return { t:'Crank it past the red line', bad:true };
@@ -1679,6 +1684,7 @@ function pressUse(){
   if(h.kind==='ledger'){ openBasementUpgrades(); return; }
   if(h.kind==='buyer'){ sellToBuyer(); return; }
   if(h.kind==='oilCan'){ pickUpOil(); return; }
+  if(h.kind==='customModel'){ repaintModel(h.model); return; }
   var c=h.car;
   if(h.kind==='cap' && !heldNozzle){ c.capOpen=!c.capOpen; return; }
   if(h.kind==='hat'){ removeHat(c); return; }
@@ -2346,9 +2352,8 @@ function drawModelTris(tris, col, x, y, z, yaw, scale, refY){
 function drawCustomModel(m){
   drawModelTris(m.tris, m.col, m.x, m.y, m.z, m.yaw, m.scale);
 }
-function importModelAt(tris, x, z, yaw){
-  CUSTOM_MODELS.push({ tris:tris, x:x, y:0, z:z, yaw:yaw, scale:1,
-    col:pick([[196,150,90],[150,170,190],[180,90,80],[110,150,110],[170,150,200]]) });
+function importModelAt(tris, x, z, yaw, col){
+  CUSTOM_MODELS.push({ tris:tris, x:x, y:0, z:z, yaw:yaw, scale:1, col:col });
 }
 /* ── wired slots: an imported model standing in for a specific existing
    thing everywhere that thing is drawn, instead of a one-off dropped prop.
@@ -2367,24 +2372,50 @@ function drawSlot(key, x, z, yaw, scale, y, refY){
   drawModelTris(m.tris, m.col, x, y||0, z, yaw||0, scale, refY);
   return true;
 }
+/* one flat colour per model — there is no texture pipeline here, so
+   "painting" just means picking which solid colour every face gets lit as */
+var MODEL_PALETTE=[
+  [196,150,90],[150,170,190],[180,90,80],[110,150,110],[170,150,200],
+  [224,60,54],[64,124,224],[230,196,60],[64,196,140],[228,140,60],
+  [90,90,100],[240,240,236],[40,40,44],[214,80,166]
+];
+function pickModelColor(sub, onPick){
+  var opts=[];
+  for(var i=0;i<MODEL_PALETTE.length;i++){
+    (function(col){
+      opts.push({ t:'<span class="swatch" style="background:'+hex(col)+'"></span> '+hex(col),
+        fn:function(){ onPick(col); } });
+    })(MODEL_PALETTE[i]);
+  }
+  opts.push({ rule:true });
+  opts.push({ t:'Cancel', fn:closeSheet });
+  showSheet('Pick a colour', sub, opts);
+}
+function repaintModel(m){
+  pickModelColor('Flat-shaded only — one solid colour for the whole model.',
+    function(col){ m.col=col; closeSheet(); toast('Repainted.'); });
+}
 function chooseModelDestination(tris){
   var opts=[
-    { t:'Just drop it in the world', d:'Loose prop, right where you are standing.',
+    { t:'Just drop it in the world', d:'Loose prop, right where you are standing. Repaint it any time by walking up and pressing E.',
       fn:function(){
-        closeSheet();
-        var dropX=camX+Math.sin(camYaw)*2.4, dropZ=camZ+Math.cos(camYaw)*2.4;
-        importModelAt(tris, dropX, dropZ, camYaw+PI);
-        toast('Model dropped in — '+tris.length+' triangles');
+        pickModelColor('Flat-shaded only — one solid colour for the whole model.', function(col){
+          closeSheet();
+          var dropX=camX+Math.sin(camYaw)*2.4, dropZ=camZ+Math.cos(camYaw)*2.4;
+          importModelAt(tris, dropX, dropZ, camYaw+PI, col);
+          toast('Model dropped in — '+tris.length+' triangles');
+        });
       } }
   ];
   for(var i=0;i<SLOT_DEFS.length;i++){
     (function(def){
       opts.push({ t:'Replace: '+def.label, d:'Every place the game draws this uses your model instead.',
         fn:function(){
-          closeSheet();
-          CUSTOM_SLOTS[def.key]={ tris:tris,
-            col:pick([[196,150,90],[150,170,190],[180,90,80],[110,150,110],[170,150,200]]) };
-          toast(def.label+' now uses your model — '+tris.length+' triangles');
+          pickModelColor('Flat-shaded only — one solid colour for the whole model.', function(col){
+            closeSheet();
+            CUSTOM_SLOTS[def.key]={ tris:tris, col:col };
+            toast(def.label+' now uses your model — '+tris.length+' triangles');
+          });
         } });
     })(SLOT_DEFS[i]);
   }
