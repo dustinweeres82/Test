@@ -166,7 +166,7 @@
 <canvas id="c"></canvas>
 <canvas id="ov"></canvas>
 <div id="hurtFlash"></div>
-<input type="file" id="modelFile" accept=".obj" style="display:none">
+<input type="file" id="modelFile" accept=".obj,.glb" style="display:none">
 
 <div id="hud">
   <div id="wallet" class="card"><span id="cash">$0</span>
@@ -2335,6 +2335,292 @@ function normalizeOBJ(tris){
   }
   return tris;
 }
+/* ── bring-your-own rigged characters (.glb): a minimal glTF-binary reader
+   plus CPU linear-blend skinning and keyframe playback. There is no vertex
+   shader here to do skinning for us, so every animated frame re-poses the
+   skeleton, re-skins the mesh into a fresh triangle soup, and hands that to
+   the exact same drawModelTris() tail every static import already uses —
+   the whole renderer already recomputes all its geometry from scratch every
+   frame, so this fits the existing shape rather than fighting it. Scope is
+   deliberately narrow: only self-contained .glb (embedded binary chunk, one
+   buffer) — no external .bin/.gltf, no textures (this renderer has no UV
+   pipeline; rigged imports stay one flat colour same as static ones), no
+   morph targets, and CUBICSPLINE tracks fall back to their key value
+   instead of being smoothly interpolated through their tangents. */
+function parseGLB(buf){
+  var dv=new DataView(buf);
+  if(dv.getUint32(0,true)!==0x46546C67) throw new Error('not a .glb file');
+  var length=dv.getUint32(8,true);
+  var off=12, json=null, bin=null;
+  while(off<length){
+    var chunkLen=dv.getUint32(off,true), chunkType=dv.getUint32(off+4,true);
+    var chunkStart=off+8;
+    if(chunkType===0x4E4F534A) json=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,chunkStart,chunkLen)));
+    else if(chunkType===0x004E4942) bin=new Uint8Array(buf,chunkStart,chunkLen);
+    off=chunkStart+chunkLen;
+  }
+  if(!json) throw new Error('no JSON chunk');
+  return { json:json, bin:bin };
+}
+var GLTF_COMP={5120:Int8Array,5121:Uint8Array,5122:Int16Array,5123:Uint16Array,5125:Uint32Array,5126:Float32Array};
+var GLTF_NCOMP={SCALAR:1,VEC2:2,VEC3:3,VEC4:4,MAT2:4,MAT3:9,MAT4:16};
+function gltfReadAccessor(json,bin,idx){
+  var acc=json.accessors[idx];
+  var nc=GLTF_NCOMP[acc.type], n=acc.count;
+  var out=new Float32Array(n*nc);
+  if(acc.bufferView===undefined || !bin) return out;   /* sparse-only accessor: not needed for character exports */
+  var bv=json.bufferViews[acc.bufferView];
+  var CompCtor=GLTF_COMP[acc.componentType];
+  var compSize=CompCtor.BYTES_PER_ELEMENT;
+  var stride=bv.byteStride || nc*compSize;
+  var base=(bv.byteOffset||0)+(acc.byteOffset||0);
+  var dv=new DataView(bin.buffer, bin.byteOffset, bin.byteLength);
+  var norm=!!acc.normalized;
+  for(var i=0;i<n;i++){
+    var rowOff=base+i*stride;
+    for(var c=0;c<nc;c++){
+      var v, o=rowOff+c*compSize;
+      switch(acc.componentType){
+        case 5120: v=dv.getInt8(o); if(norm) v=Math.max(v/127,-1); break;
+        case 5121: v=dv.getUint8(o); if(norm) v=v/255; break;
+        case 5122: v=dv.getInt16(o,true); if(norm) v=Math.max(v/32767,-1); break;
+        case 5123: v=dv.getUint16(o,true); if(norm) v=v/65535; break;
+        case 5125: v=dv.getUint32(o,true); break;
+        default: v=dv.getFloat32(o,true);
+      }
+      out[i*nc+c]=v;
+    }
+  }
+  return out;
+}
+/* column-major 4x4s, glTF/WebGL convention throughout */
+function mat4Compose(t,q,s){
+  var x=q[0],y=q[1],z=q[2],w=q[3];
+  var x2=x+x,y2=y+y,z2=z+z;
+  var xx=x*x2,xy=x*y2,xz=x*z2, yy=y*y2,yz=y*z2,zz=z*z2, wx=w*x2,wy=w*y2,wz=w*z2;
+  var sx=s[0],sy=s[1],sz=s[2];
+  return [
+    (1-(yy+zz))*sx,(xy+wz)*sx,(xz-wy)*sx,0,
+    (xy-wz)*sy,(1-(xx+zz))*sy,(yz+wx)*sy,0,
+    (xz+wy)*sz,(yz-wx)*sz,(1-(xx+yy))*sz,0,
+    t[0],t[1],t[2],1
+  ];
+}
+function mat4Mul(a,b){
+  var out=new Array(16);
+  for(var col=0;col<4;col++) for(var row=0;row<4;row++){
+    var sum=0; for(var k=0;k<4;k++) sum+=a[k*4+row]*b[col*4+k];
+    out[col*4+row]=sum;
+  }
+  return out;
+}
+function mat4XformPt(m,x,y,z){
+  return [ m[0]*x+m[4]*y+m[8]*z+m[12], m[1]*x+m[5]*y+m[9]*z+m[13], m[2]*x+m[6]*y+m[10]*z+m[14] ];
+}
+function quatSlerp(a,b,t){
+  var ax=a[0],ay=a[1],az=a[2],aw=a[3], bx=b[0],by=b[1],bz=b[2],bw=b[3];
+  var cosom=ax*bx+ay*by+az*bz+aw*bw;
+  if(cosom<0){ cosom=-cosom; bx=-bx;by=-by;bz=-bz;bw=-bw; }
+  var s0,s1;
+  if(1-cosom>1e-6){ var omega=Math.acos(cosom), sinom=Math.sin(omega); s0=Math.sin((1-t)*omega)/sinom; s1=Math.sin(t*omega)/sinom; }
+  else { s0=1-t; s1=t; }
+  return [ax*s0+bx*s1, ay*s0+by*s1, az*s0+bz*s1, aw*s0+bw*s1];
+}
+function buildRig(json,bin){
+  var nodes=json.nodes||[];
+  var baseTRS=nodes.map(function(nd){
+    if(nd.matrix) return { matrix:nd.matrix };
+    return { t:nd.translation||[0,0,0], r:nd.rotation||[0,0,0,1], s:nd.scale||[1,1,1] };
+  });
+  var roots=(json.scenes && json.scenes[json.scene||0] && json.scenes[json.scene||0].nodes) || [];
+  /* flatten every mesh-bearing node into a drawable primitive list */
+  var prims=[];
+  for(var ni=0;ni<nodes.length;ni++){
+    var nd=nodes[ni]; if(nd.mesh===undefined) continue;
+    var mesh=json.meshes[nd.mesh];
+    for(var pi=0;pi<mesh.primitives.length;pi++){
+      var p=mesh.primitives[pi];
+      if(p.mode!==undefined && p.mode!==4) continue;   /* triangles only */
+      if(!p.attributes || p.attributes.POSITION===undefined) continue;
+      var pos=gltfReadAccessor(json,bin,p.attributes.POSITION);
+      var indices=p.indices!==undefined ? gltfReadAccessor(json,bin,p.indices) : null;
+      var skinned=nd.skin!==undefined && p.attributes.JOINTS_0!==undefined && p.attributes.WEIGHTS_0!==undefined;
+      var joints=null, weights=null;
+      if(skinned){
+        joints=gltfReadAccessor(json,bin,p.attributes.JOINTS_0);
+        weights=gltfReadAccessor(json,bin,p.attributes.WEIGHTS_0);
+      }
+      prims.push({ node:ni, skin:skinned?nd.skin:null, pos:pos, indices:indices, joints:joints, weights:weights });
+    }
+  }
+  if(!prims.length) throw new Error('no triangle meshes found');
+  var skins=(json.skins||[]).map(function(sk){
+    var ibm=sk.inverseBindMatrices!==undefined ? gltfReadAccessor(json,bin,sk.inverseBindMatrices) : null;
+    var mats=[];
+    for(var i=0;i<sk.joints.length;i++) mats.push(ibm ? Array.prototype.slice.call(ibm,i*16,i*16+16) : [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);
+    return { joints:sk.joints, inv:mats };
+  });
+  /* animations: bake every channel's sampled keyframes once, at import time */
+  var anims=(json.animations||[]).map(function(a,ai){
+    var tracks=[], duration=0;
+    for(var ci=0;ci<a.channels.length;ci++){
+      var ch=a.channels[ci];
+      if(ch.target.node===undefined) continue;
+      var path=ch.target.path; if(path!=='translation'&&path!=='rotation'&&path!=='scale') continue;
+      var sm=a.samplers[ch.sampler];
+      var times=gltfReadAccessor(json,bin,sm.input);
+      var values=gltfReadAccessor(json,bin,sm.output);
+      var interp=sm.interpolation||'LINEAR';
+      var nc=path==='rotation'?4:3;
+      duration=Math.max(duration, times[times.length-1]||0);
+      tracks.push({ node:ch.target.node, path:path, times:times, values:values, interp:interp, nc:nc });
+    }
+    return { name:a.name||('Clip '+(ai+1)), tracks:tracks, duration:duration };
+  });
+  return { json:json, nodes:nodes, baseTRS:baseTRS, roots:roots, prims:prims, skins:skins, anims:anims };
+}
+function sliceVal(tr,i){
+  var nc=tr.nc;
+  if(tr.interp==='CUBICSPLINE'){
+    var base=i*nc*3+nc;   /* layout per key is [inTangent, value, outTangent] — keep just the value */
+    return Array.prototype.slice.call(tr.values, base, base+nc);
+  }
+  return Array.prototype.slice.call(tr.values, i*nc, i*nc+nc);
+}
+function sampleTrack(tr,t){
+  var times=tr.times, n=times.length;
+  if(n===0) return null;
+  if(n===1 || t<=times[0]) return sliceVal(tr,0);
+  if(t>=times[n-1]) return sliceVal(tr,n-1);
+  var i=0; while(i<n-1 && times[i+1]<t) i++;
+  var t0=times[i], t1=times[i+1], f=(t-t0)/((t1-t0)||1);
+  if(tr.interp==='STEP') return sliceVal(tr,i);
+  var a=sliceVal(tr,i), b=sliceVal(tr,i+1);
+  if(tr.path==='rotation') return quatSlerp(a,b,f);
+  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f];
+}
+function poseRig(rig, clipIdx, t){
+  var nodes=rig.nodes;
+  var overrides={};
+  if(clipIdx!=null && rig.anims[clipIdx]){
+    var anim=rig.anims[clipIdx];
+    var tt=anim.duration>0 ? (t % anim.duration) : 0;
+    for(var i=0;i<anim.tracks.length;i++){
+      var tr=anim.tracks[i], val=sampleTrack(tr,tt); if(!val) continue;
+      var o=overrides[tr.node] || (overrides[tr.node]={});
+      o[tr.path]=val;
+    }
+  }
+  var localMat=new Array(nodes.length);
+  for(var n=0;n<nodes.length;n++){
+    var base=rig.baseTRS[n];
+    if(base.matrix){ localMat[n]=base.matrix; continue; }
+    var ov=overrides[n];
+    localMat[n]=mat4Compose((ov&&ov.translation)||base.t, (ov&&ov.rotation)||base.r, (ov&&ov.scale)||base.s);
+  }
+  var worldMat=new Array(nodes.length);
+  function walkNode(idx,parent){
+    var wm=parent ? mat4Mul(parent,localMat[idx]) : localMat[idx];
+    worldMat[idx]=wm;
+    var ch=nodes[idx].children;
+    if(ch) for(var c=0;c<ch.length;c++) walkNode(ch[c],wm);
+  }
+  for(var r=0;r<rig.roots.length;r++) walkNode(rig.roots[r],null);
+  return worldMat;
+}
+function rigSkinnedPositions(rig, worldMat){
+  var jointMats=rig.skins.map(function(sk){
+    return sk.joints.map(function(nodeIdx,k){ return mat4Mul(worldMat[nodeIdx], sk.inv[k]); });
+  });
+  var out=[];
+  for(var pi=0;pi<rig.prims.length;pi++){
+    var pr=rig.prims[pi];
+    var n=pr.pos.length/3, pos=new Float32Array(n*3);
+    if(pr.skin!=null){
+      var jm=jointMats[pr.skin];
+      for(var i=0;i<n;i++){
+        var vx=pr.pos[i*3],vy=pr.pos[i*3+1],vz=pr.pos[i*3+2];
+        var j0=pr.joints[i*4]|0,j1=pr.joints[i*4+1]|0,j2=pr.joints[i*4+2]|0,j3=pr.joints[i*4+3]|0;
+        var w0=pr.weights[i*4],w1=pr.weights[i*4+1],w2=pr.weights[i*4+2],w3=pr.weights[i*4+3];
+        var ws=(w0+w1+w2+w3)||1, px=0,py=0,pz=0, p;
+        if(w0){ p=mat4XformPt(jm[j0],vx,vy,vz); px+=p[0]*w0; py+=p[1]*w0; pz+=p[2]*w0; }
+        if(w1){ p=mat4XformPt(jm[j1],vx,vy,vz); px+=p[0]*w1; py+=p[1]*w1; pz+=p[2]*w1; }
+        if(w2){ p=mat4XformPt(jm[j2],vx,vy,vz); px+=p[0]*w2; py+=p[1]*w2; pz+=p[2]*w2; }
+        if(w3){ p=mat4XformPt(jm[j3],vx,vy,vz); px+=p[0]*w3; py+=p[1]*w3; pz+=p[2]*w3; }
+        pos[i*3]=px/ws; pos[i*3+1]=py/ws; pos[i*3+2]=pz/ws;
+      }
+    } else {
+      var wm=worldMat[pr.node];
+      for(var i=0;i<n;i++){
+        var p2=mat4XformPt(wm, pr.pos[i*3],pr.pos[i*3+1],pr.pos[i*3+2]);
+        pos[i*3]=p2[0]; pos[i*3+1]=p2[1]; pos[i*3+2]=p2[2];
+      }
+    }
+    out.push(pos);
+  }
+  return out;
+}
+function rigToTris(rig, posArr){
+  var tris=[];
+  for(var pi=0;pi<rig.prims.length;pi++){
+    var pr=rig.prims[pi], pos=posArr[pi], idx=pr.indices, vcount=pos.length/3;
+    if(idx){
+      for(var i=0;i<idx.length;i+=3){
+        var a=idx[i]*3,b=idx[i+1]*3,c=idx[i+2]*3;
+        tris.push([pos[a],pos[a+1],pos[a+2], pos[b],pos[b+1],pos[b+2], pos[c],pos[c+1],pos[c+2]]);
+      }
+    } else {
+      for(var i=0;i+2<vcount;i+=3){
+        var a2=i*3,b2=(i+1)*3,c2=(i+2)*3;
+        tris.push([pos[a2],pos[a2+1],pos[a2+2], pos[b2],pos[b2+1],pos[b2+2], pos[c2],pos[c2+1],pos[c2+2]]);
+      }
+    }
+  }
+  return tris;
+}
+/* same centre/floor/scale convention as normalizeOBJ, computed once from the
+   BIND pose (posing it fresh every frame would make the model's scale and
+   position drift as its own limbs move through the animation) */
+function normalizeRig(rig){
+  var worldMat=poseRig(rig,null,0);
+  var tris=rigToTris(rig, rigSkinnedPositions(rig,worldMat));
+  var minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9,minz=1e9,maxz=-1e9,i,k;
+  for(i=0;i<tris.length;i++) for(k=0;k<9;k+=3){
+    var x=tris[i][k],y=tris[i][k+1],z=tris[i][k+2];
+    if(x<minx)minx=x; if(x>maxx)maxx=x;
+    if(y<miny)miny=y; if(y>maxy)maxy=y;
+    if(z<minz)minz=z; if(z>maxz)maxz=z;
+  }
+  var span=Math.max(maxx-minx,maxy-miny,maxz-minz)||1;
+  rig.norm={ cx:(minx+maxx)/2, cz:(minz+maxz)/2, miny:miny, scale:1.6/span };
+  rig.bindTris=tris;   /* only used for the "N triangles" readout before an animation is picked */
+}
+function applyRigNorm(tris, norm){
+  for(var i=0;i<tris.length;i++){
+    var t=tris[i];
+    for(var k=0;k<9;k+=3){
+      t[k]=(t[k]-norm.cx)*norm.scale;
+      t[k+1]=(t[k+1]-norm.miny)*norm.scale;
+      t[k+2]=(t[k+2]-norm.cz)*norm.scale;
+    }
+  }
+  return tris;
+}
+var FRAME_ID=0;
+/* re-posing+re-skinning is real per-vertex work, so it's cached per rig per
+   rendered frame — every car sharing the 'driver' slot re-uses one pose
+   instead of re-skinning the same character N times a frame */
+function poseAndDrawTris(rig, clipIdx, speed){
+  if(rig._cf===FRAME_ID && rig._cclip===clipIdx) return rig._ctris;
+  var worldMat=poseRig(rig, clipIdx, gTime*(speed||1));
+  var tris=applyRigNorm(rigToTris(rig, rigSkinnedPositions(rig,worldMat)), rig.norm);
+  rig._cf=FRAME_ID; rig._cclip=clipIdx; rig._ctris=tris;
+  return tris;
+}
+function drawRiggedModel(m, x,y,z,yaw,scale,refY){
+  var tris=poseAndDrawTris(m.rig, m.clipIndex, m.animSpeed);
+  drawModelTris(tris, m.col, x, y, z, yaw, scale, refY);
+}
 /* shared low-level draw: a triangle soup, one flat colour, positioned/scaled/
    rotated on demand — everything below (loose drops and wired slots alike)
    goes through this one path */
@@ -2350,7 +2636,8 @@ function drawModelTris(tris, col, x, y, z, yaw, scale, refY){
   }
 }
 function drawCustomModel(m){
-  drawModelTris(m.tris, m.col, m.x, m.y, m.z, m.yaw, m.scale);
+  if(m.rig) drawRiggedModel(m, m.x, m.y, m.z, m.yaw, m.scale);
+  else drawModelTris(m.tris, m.col, m.x, m.y, m.z, m.yaw, m.scale);
 }
 /* ── voxelize: sample the mesh's surface onto a grid, then re-emit only the
    cube faces that actually border empty space. A face between two solid
@@ -2431,8 +2718,10 @@ function voxelizeModel(m, res){
 function unvoxelizeModel(m){
   if(m.origTris){ m.tris=m.origTris; m.voxelized=false; }
 }
-function importModelAt(tris, x, z, yaw, col){
-  CUSTOM_MODELS.push({ tris:tris, x:x, y:0, z:z, yaw:yaw, scale:1, col:col });
+function importModelAt(tris, x, z, yaw, col, rig){
+  var m={ tris:tris, x:x, y:0, z:z, yaw:yaw, scale:1, col:col };
+  if(rig){ m.rig=rig; m.clipIndex=rig.pendingClip; m.animSpeed=1; }
+  CUSTOM_MODELS.push(m);
 }
 /* ── wired slots: an imported model standing in for a specific existing
    thing everywhere that thing is drawn, instead of a one-off dropped prop.
@@ -2448,7 +2737,8 @@ var SLOT_DEFS=[
 ];
 function drawSlot(key, x, z, yaw, scale, y, refY){
   var m=CUSTOM_SLOTS[key]; if(!m) return false;
-  drawModelTris(m.tris, m.col, x, y||0, z, (yaw||0)+(m.rot||0), scale*(m.scale||1), refY);
+  if(m.rig) drawRiggedModel(m, x, y||0, z, (yaw||0)+(m.rot||0), scale*(m.scale||1), refY);
+  else drawModelTris(m.tris, m.col, x, y||0, z, (yaw||0)+(m.rot||0), scale*(m.scale||1), refY);
   return true;
 }
 /* one flat colour per model — there is no texture pipeline here, so
@@ -2483,6 +2773,33 @@ function voxelizeOpts(m, reopen){
     { t:'Un-voxelize', d:'Back to the original smooth mesh.', fn:function(){ unvoxelizeModel(m); reopen(); } }
   ];
 }
+function modelAdjustSub(m){
+  if(m.rig){
+    var clipName=(m.clipIndex!=null && m.rig.anims[m.clipIndex]) ? m.rig.anims[m.clipIndex].name : 'bind pose (no animation)';
+    return 'Rigged &middot; '+clipName+' &middot; Scale &times;'+(m.scale||1).toFixed(2);
+  }
+  return (m.voxelized?'Voxelized &middot; ':'')+'Scale &times;'+(m.scale||1).toFixed(2)+' &middot; '+m.tris.length+' triangles';
+}
+/* a rigged import's geometry changes every frame, so voxelizing it isn't
+   supported — instead offer clip/speed controls in its place */
+function rigOpts(m, reopen){
+  var opts=[];
+  if(m.rig.anims.length>1){
+    opts.push({ t:'Change animation', fn:function(){
+      var sub=[];
+      for(var i=0;i<m.rig.anims.length;i++){
+        (function(i){ sub.push({ t:m.rig.anims[i].name, fn:function(){ m.clipIndex=i; closeSheet(); reopen(); } }); })(i);
+      }
+      sub.push({ t:'No animation — bind pose', fn:function(){ m.clipIndex=null; closeSheet(); reopen(); } });
+      sub.push({ rule:true });
+      sub.push({ t:'Cancel', fn:function(){ closeSheet(); reopen(); } });
+      showSheet('Pick an animation', m.rig.anims.length+' clips found', sub);
+    } });
+  }
+  opts.push({ t:'Play faster', right:'&times;1.3', fn:function(){ m.animSpeed=Math.min(4,(m.animSpeed||1)*1.3); reopen(); } });
+  opts.push({ t:'Play slower', right:'&times;0.77', fn:function(){ m.animSpeed=Math.max(0.1,(m.animSpeed||1)/1.3); reopen(); } });
+  return opts;
+}
 function openModelAdjust(m){
   var reopen=function(){ openModelAdjust(m); };
   var opts=[
@@ -2493,14 +2810,14 @@ function openModelAdjust(m){
     { t:'Scale up', right:'&times;1.15', fn:function(){ m.scale=Math.min(8,m.scale*1.15); reopen(); } },
     { t:'Scale down', right:'&times;0.87', fn:function(){ m.scale=Math.max(0.1,m.scale/1.15); reopen(); } },
     { rule:true }
-  ].concat(voxelizeOpts(m, reopen)).concat([
+  ].concat(m.rig ? rigOpts(m, reopen) : voxelizeOpts(m, reopen)).concat([
     { rule:true },
     { t:'Remove it', fn:function(){
         var idx=CUSTOM_MODELS.indexOf(m); if(idx>=0) CUSTOM_MODELS.splice(idx,1);
         closeSheet(); toast('Removed.'); } },
     { t:'Done', fn:closeSheet }
   ]);
-  showSheet('Adjust model', (m.voxelized?'Voxelized &middot; ':'')+'Scale &times;'+m.scale.toFixed(2)+' &middot; '+m.tris.length+' triangles', opts);
+  showSheet('Adjust model', modelAdjustSub(m), opts);
 }
 /* a wired slot: same adjustments, but they apply everywhere that slot is
    drawn (every car, every driver, ...) since it is one shared template */
@@ -2515,21 +2832,22 @@ function openSlotAdjust(key, label){
     { t:'Scale up', right:'&times;1.15', fn:function(){ m.scale=Math.min(4,(m.scale||1)*1.15); reopen(); } },
     { t:'Scale down', right:'&times;0.87', fn:function(){ m.scale=Math.max(0.1,(m.scale||1)/1.15); reopen(); } },
     { rule:true }
-  ].concat(voxelizeOpts(m, reopen)).concat([
+  ].concat(m.rig ? rigOpts(m, reopen) : voxelizeOpts(m, reopen)).concat([
     { rule:true },
     { t:'Revert to the original look', fn:function(){ delete CUSTOM_SLOTS[key]; closeSheet(); toast(label+' back to normal.'); } },
     { t:'Done', fn:closeSheet }
   ]);
-  showSheet('Adjust: '+label, (m.voxelized?'Voxelized &middot; ':'')+'Scale &times;'+(m.scale||1).toFixed(2)+' &middot; '+m.tris.length+' triangles', opts);
+  showSheet('Adjust: '+label, modelAdjustSub(m), opts);
 }
-function chooseModelDestination(tris){
+function chooseModelDestination(payload){
+  var tris=payload.tris, rig=payload.rig;
   var opts=[
     { t:'Just drop it in the world', d:'Loose prop, right where you are standing. Adjust it any time by walking up and pressing E.',
       fn:function(){
         pickModelColor('Flat-shaded only — one solid colour for the whole model.', function(col){
           closeSheet();
           var dropX=camX+Math.sin(camYaw)*2.4, dropZ=camZ+Math.cos(camYaw)*2.4;
-          importModelAt(tris, dropX, dropZ, camYaw+PI, col);
+          importModelAt(tris, dropX, dropZ, camYaw+PI, col, rig);
           openModelAdjust(CUSTOM_MODELS[CUSTOM_MODELS.length-1]);
         });
       } }
@@ -2540,7 +2858,9 @@ function chooseModelDestination(tris){
         fn:function(){
           pickModelColor('Flat-shaded only — one solid colour for the whole model.', function(col){
             closeSheet();
-            CUSTOM_SLOTS[def.key]={ tris:tris, col:col, scale:1, rot:0 };
+            var m={ tris:tris, col:col, scale:1, rot:0 };
+            if(rig){ m.rig=rig; m.clipIndex=rig.pendingClip; m.animSpeed=1; }
+            CUSTOM_SLOTS[def.key]=m;
             openSlotAdjust(def.key, def.label);
           });
         } });
@@ -2548,21 +2868,51 @@ function chooseModelDestination(tris){
   }
   opts.push({ rule:true });
   opts.push({ t:'Never mind', fn:closeSheet });
-  showSheet('Use this model for...', tris.length+' triangles imported', opts);
+  showSheet('Use this model for...',
+    (rig?'Rigged &middot; ':'')+tris.length+' triangles imported'+(rig?(' &middot; '+rig.anims.length+' animation'+(rig.anims.length===1?'':'s')):''),
+    opts);
+}
+function pickRigClip(rig, done){
+  var opts=[];
+  for(var i=0;i<rig.anims.length;i++){
+    (function(i){ opts.push({ t:rig.anims[i].name, d:rig.anims[i].duration.toFixed(1)+'s loop',
+      fn:function(){ rig.pendingClip=i; closeSheet(); done(); } }); })(i);
+  }
+  opts.push({ t:'No animation — just the bind pose', fn:function(){ rig.pendingClip=null; closeSheet(); done(); } });
+  showSheet('Pick a starting animation', rig.anims.length+' clips found — you can change this later', opts);
+}
+function handleGLB(buf){
+  var g=parseGLB(buf);
+  var rig=buildRig(g.json, g.bin);
+  normalizeRig(rig);
+  var payload={ tris:rig.bindTris, rig:rig };
+  if(rig.anims.length>1) pickRigClip(rig, function(){ chooseModelDestination(payload); });
+  else { rig.pendingClip=rig.anims.length===1?0:null; chooseModelDestination(payload); }
 }
 (function setupModelImport(){
   var input=document.getElementById('modelFile');
   input.addEventListener('change', function(){
     var file=input.files[0]; if(!file) return;
+    var name=file.name.toLowerCase();
     var reader=new FileReader();
-    reader.onload=function(){
-      var tris;
-      try{ tris=normalizeOBJ(parseOBJ(reader.result)); }
-      catch(e){ toast('Could not read that .obj'); return; }
-      if(!tris.length){ toast('No faces found in that file'); return; }
-      chooseModelDestination(tris);
-    };
-    reader.readAsText(file);
+    if(name.endsWith('.glb')){
+      reader.onload=function(){
+        try{ handleGLB(reader.result); }
+        catch(e){ toast('Could not read that .glb — '+e.message); }
+      };
+      reader.readAsArrayBuffer(file);
+    } else if(name.endsWith('.gltf')){
+      toast('Only self-contained .glb files are supported, not .gltf');
+    } else {
+      reader.onload=function(){
+        var tris;
+        try{ tris=normalizeOBJ(parseOBJ(reader.result)); }
+        catch(e){ toast('Could not read that .obj'); return; }
+        if(!tris.length){ toast('No faces found in that file'); return; }
+        chooseModelDestination({ tris:tris });
+      };
+      reader.readAsText(file);
+    }
     input.value='';
   });
 })();
@@ -4834,6 +5184,7 @@ function render(){
     camPitch += Math.cos(gTime*67)*camKickMag*0.6*kk;
   }
   setCamBasis();
+  FRAME_ID++;
   DLn=0; glOpaque.length=0; glTrans.length=0;
   if(inBasement){
     drawBasementRoom();
