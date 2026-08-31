@@ -1516,6 +1516,8 @@ var TOOLS = [
     d:'Ends the conversation. Ends the review too.' },
   { id:'fireext',key:'9', name:'FIRE EXT',g:'&#129519;', owned:false, price:140,
     d:'Puts out cars. Also works on people, if you are that sort.' },
+  { id:'shovel', key:'H', name:'SHOVEL', g:'&#9935;',    owned:false, price:70,
+    d:'Dig anywhere the ground is clear. Who knows what is down there.' },
   { id:'bat',    key:'0', name:'BAT',    g:'&#9918;',    owned:false, price:0, hidden:true,
     d:'Buford\u2019s bat. Swing with the mouse. G puts it down.' }
 ];
@@ -1626,6 +1628,13 @@ function updateAim(){
     if(score>bestScore){ bestScore=score; best=h; }
   }
   aim=best;
+  /* the shovel works anywhere, not just at a pre-registered hotspot — only
+     kicks in once nothing more specific won the loop above, and only where
+     the ground is actually open (not inside a building, over a pump, etc) */
+  if(!aim && tool==='shovel'){
+    var gp=groundAimPoint(4.2);
+    if(gp && !blocked(gp.x,gp.z)) aim={ kind:'ground', x:gp.x, y:0, z:gp.z, r:0 };
+  }
   /* a voxel-destructible hotspot is just "roughly looking at this thing" —
      resolve its actual model/placement/removal-callback, and for a
      voxelized one, refine the coarse hit into the exact cube under the
@@ -1679,6 +1688,7 @@ function actionFor(h){
     return { t:'Take the payment' };
   }
   if(h.kind==='oilCan') return heldOil ? null : { t:'Grab a quart of oil' };
+  if(h.kind==='ground') return { t:'Hold to dig', hold:true };
   if(h.kind==='customModel'){
     var va=voxelDestructAction(h); if(va) return va;
     return { t:'Adjust it' };
@@ -1821,7 +1831,12 @@ function pressUse(){
 }
 function holdUse(dt){
   var h=aim, a=actionFor(h);
-  if(!h||!a||!a.hold){ if(pumping) stopPump(); return; }
+  if(!h||!a||!a.hold){ if(pumping) stopPump(); digProgress=0; return; }
+  if(h.kind==='ground'){
+    digProgress+=dt;
+    if(digProgress>=1.1){ digProgress=0; addDigHole(h.x,h.z); }
+    return;
+  }
   var c=h.car;
   if(h.kind==='cap' && heldNozzle && c.capOpen){ pumpFuel(c,dt); return; }
   if(tool==='fireext' && h.model && h.model.onFire){
@@ -2025,6 +2040,41 @@ function addChaos(n){ chaosScore=clamp(chaosScore+n,0,100); }
 
 /* ── the least dignified prank in the game ───────────────────────────────── */
 var POOP_PILES=[], poopTimer=rnd(10,20), heldPoop=false, poopSupply=0;
+/* ── the shovel: dig anywhere the ground is open ─────────────────────────── */
+var DIG_HOLES=[], digProgress=0;
+/* where the camera is currently looking at the ground plane (y=0), or null
+   if it isn't looking down far enough or the spot is out of reach */
+function groundAimPoint(maxDist){
+  if(fy>=-0.05) return null;
+  var t=-camY/fy;
+  if(t<=0.3 || t>maxDist) return null;
+  return { x:camX+fx*t, z:camZ+fz*t };
+}
+function addDigHole(x,z){
+  for(var i=0;i<DIG_HOLES.length;i++){
+    if(dist2(x,z,DIG_HOLES[i].x,DIG_HOLES[i].z)<1.0){ toast('Already dug there.'); return; }
+  }
+  if(DIG_HOLES.length>=40) DIG_HOLES.shift();
+  DIG_HOLES.push({ x:x, z:z, seed:(Math.random()*100000)|0 });
+  addChaos(1);
+  toast(pick(['Dug a hole.','There. A hole.','Turned over some dirt.','Found nothing. Yet.']));
+  for(var k=0;k<8;k++) FX.push({ x:x+rnd(-0.3,0.3), y:0.1+rnd(0,0.2), z:z+rnd(-0.3,0.3),
+    vy:rnd(0.6,1.3), t:0, life:rnd(0.3,0.5), r:0.03+rnd(0,0.02), col:[120,96,70] });
+}
+function drawDigHoles(){
+  for(var i=0;i<DIG_HOLES.length;i++){
+    var h=DIG_HOLES[i];
+    groundQuad(h.x, h.z, 0.55, 0.55, 0, [58,48,38], 0.9, 0.022);
+    var rn=rngFrom(h.seed), B=basis(0,0,0), o=[h.x,0,h.z];
+    for(var k=0;k<5;k++){
+      var ang=rn()*PI*2, rad=0.35+rn()*0.25;
+      var mx=Math.sin(ang)*rad, mz=Math.cos(ang)*rad;
+      var sx=0.09+rn()*0.06, sy=0.06+rn()*0.05, sz=0.09+rn()*0.06;
+      var t=140+((rn()*40)|0);
+      drawBox(B,o, mx, sy*0.8, mz, sx, sy, sz, [t*0.62|0, t*0.5|0, t*0.36|0], null);
+    }
+  }
+}
 var POOP_ANCHOR={ panelL:[-0.90,1.00,-0.20], panelR:[0.90,1.00,-0.20], front:[0,0.90,-2.05] };
 function spawnPoopPile(){
   if(POOP_PILES.length>=3) return;
@@ -4606,7 +4656,8 @@ window.addEventListener('keydown', function(e){
   if(e.code==='KeyM'){ if(locked) document.exitPointerLock(); document.getElementById('modelFile').click(); }
   if(e.code==='KeyV'){ if(Object.keys(AUTO_VOX).length) unvoxelizeEverything(); else voxelizeEverything(); }
   for(var i=0;i<TOOLS.length;i++){
-    if(e.code==='Digit'+TOOLS[i].key){
+    var tk=TOOLS[i].key;
+    if(e.code===(/[0-9]/.test(tk)?'Digit':'Key')+tk){
       if(!TOOLS[i].owned){ toast(TOOLS[i].id==='bat'
         ? (BAT.lent ? 'The bat is on the ground where you left it' : 'You have not got a bat')
         : 'You do not own the '+TOOLS[i].name.toLowerCase()+' yet'); break; }
@@ -5837,6 +5888,7 @@ function render(){
     drawRestroomSign();
     drawGull();
     drawBuyer();
+    drawDigHoles();
     for(var mI=0;mI<CUSTOM_MODELS.length;mI++) drawCustomModel(CUSTOM_MODELS[mI]);
     for(var i=0;i<CARS.length;i++) drawCar(CARS[i]);
     drawStoreInterior();
