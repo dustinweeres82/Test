@@ -1562,6 +1562,12 @@ function updateAim(){
     if(score>bestScore){ bestScore=score; best=h; }
   }
   aim=best;
+  /* the customModel hotspot is just "roughly looking at this model" — for a
+     voxelized one, refine that into the exact cube under the crosshair */
+  if(aim && aim.kind==='customModel' && aim.model.voxelized && aim.model.voxelCells){
+    var ray=worldToVoxelRay(aim.model);
+    aim.voxel=raycastVoxels(aim.model.voxelCells, aim.model.voxelCellSize, ray.ro, ray.rd, ray.maxDist);
+  }
 }
 /* ── what does the held tool do to that hotspot? ─────────────────────────── */
 function actionFor(h){
@@ -1583,7 +1589,19 @@ function actionFor(h){
     return { t:'Take the payment' };
   }
   if(h.kind==='oilCan') return heldOil ? null : { t:'Grab a quart of oil' };
-  if(h.kind==='customModel') return { t:'Adjust it' };
+  if(h.kind==='customModel'){
+    var mm=h.model;
+    if(mm.onFire){
+      if(tool==='fireext') return { t:'Hold to put it out', hold:true };
+      return { t:'It’s on fire — stand back' };
+    }
+    if(mm.voxelized && h.voxel){
+      if(tool==='crowbar') return { t:'Knock out that block', bad:true };
+      if(tool==='gun') return { t:'Shoot it out', bad:true };
+      if(tool==='lighter') return { t:'Set it alight', bad:true };
+    }
+    return { t:'Adjust it' };
+  }
   if(h.kind==='candyShelf') return { t:'Rearrange every shelf', bad:true };
   if(h.kind==='hotdogRoller') return { t:'Sneeze in the roller', bad:true };
   if(h.kind==='slushee') return { t:'Crank it past the red line', bad:true };
@@ -1684,7 +1702,16 @@ function pressUse(){
   if(h.kind==='ledger'){ openBasementUpgrades(); return; }
   if(h.kind==='buyer'){ sellToBuyer(); return; }
   if(h.kind==='oilCan'){ pickUpOil(); return; }
-  if(h.kind==='customModel'){ openModelAdjust(h.model); return; }
+  if(h.kind==='customModel'){
+    var mm=h.model;
+    if(mm.onFire) return;   /* only the held-fireext action does anything while it's burning */
+    if(mm.voxelized && h.voxel){
+      if(tool==='crowbar'){ knockVoxel(mm, h.voxel, 1, 1); return; }
+      if(tool==='gun'){ knockVoxel(mm, h.voxel, 2, 4); return; }
+      if(tool==='lighter'){ igniteVoxels(mm, h.voxel); return; }
+    }
+    openModelAdjust(mm); return;
+  }
   var c=h.car;
   if(h.kind==='cap' && !heldNozzle){ c.capOpen=!c.capOpen; return; }
   if(h.kind==='hat'){ removeHat(c); return; }
@@ -1709,6 +1736,12 @@ function holdUse(dt){
   if(!h||!a||!a.hold){ if(pumping) stopPump(); return; }
   var c=h.car;
   if(h.kind==='cap' && heldNozzle && c.capOpen){ pumpFuel(c,dt); return; }
+  if(tool==='fireext' && h.kind==='customModel' && h.model.onFire){
+    var mm=h.model;
+    mm.extinguishT=(mm.extinguishT||0)+dt;
+    if(mm.extinguishT>0.9){ mm.onFire=false; mm.extinguishT=0; toast('Fire’s out.'); }
+    return;
+  }
   if(pumping) stopPump();
   if(tool==='fireext' && h.kind==='driver'){ foamDriver(c,dt); return; }
   if(tool==='fireext' && c.onFire>0){ extinguish(c,dt); return; }
@@ -2710,13 +2743,140 @@ function voxelizeModel(m, res){
   var cells=voxelizeMesh(src,cellSize);
   if(Object.keys(cells).length>6000){ toast('Too fine to voxelize smoothly — try chunkier first.'); return false; }
   m.origTris=src;
+  m.voxelCells=cells;             /* kept live (not just the meshed tris) so single cubes can be knocked out later */
+  m.voxelCellSize=cellSize;
   m.tris=voxelsToTris(cells,cellSize);
   m.voxelRes=res;
   m.voxelized=true;
+  m.onFire=false; m.fireFrontier=null; m.fireSeen=null;   /* re-gridding rebuilds from the pristine source, so any damage/fire state is stale */
   return true;
 }
 function unvoxelizeModel(m){
-  if(m.origTris){ m.tris=m.origTris; m.voxelized=false; }
+  if(m.origTris){ m.tris=m.origTris; m.voxelized=false; m.voxelCells=null; m.voxelCellSize=null; m.onFire=false; m.fireFrontier=null; m.fireSeen=null; }
+}
+function remeshVoxels(m){ m.tris=voxelsToTris(m.voxelCells, m.voxelCellSize); }
+/* ── destructible voxels: a crowbar or a gunshot knocks individual cubes out
+   of the live cell grid a voxelized model is built from, and fire spreads
+   through it one connected cube at a time. Everything downstream (the mesh,
+   the "N triangles" readout, the hotspot's own radius) just reflects a
+   smaller cell grid, so no separate "health" number is needed — the grid
+   itself IS the health. Scoped to loose dropped models only: wired slots
+   (station/car/driver/...) have no in-world hotspot of their own to aim at,
+   only the moment they're first wired. ──────────────────────────────────── */
+function voxelWorldPos(m, voxel){
+  var cs=m.voxelCellSize, lx=(voxel.cx+0.5)*cs, ly=(voxel.cy+0.5)*cs, lz=(voxel.cz+0.5)*cs;
+  var B=basis(m.yaw||0,0,0), o=[m.x, m.y||0, m.z], scale=m.scale||1;
+  return ptOf(B,o, lx*scale, ly*scale, lz*scale);
+}
+/* the reverse of drawModelTris's placement transform: turns the camera's
+   position/facing into a ray in the model's own pre-scale voxel-grid units */
+function worldToVoxelRay(m){
+  var B=basis(m.yaw||0,0,0), o=[m.x, m.y||0, m.z], scale=m.scale||1;
+  var dx=camX-o[0], dy=camY-o[1], dz=camZ-o[2];
+  var ro=[ (dx*B.r[0]+dy*B.r[1]+dz*B.r[2])/scale,
+           (dx*B.u[0]+dy*B.u[1]+dz*B.u[2])/scale,
+           (dx*B.f[0]+dy*B.f[1]+dz*B.f[2])/scale ];
+  var rd=[ fx*B.r[0]+fy*B.r[1]+fz*B.r[2], fx*B.u[0]+fy*B.u[1]+fz*B.u[2], fx*B.f[0]+fy*B.f[1]+fz*B.f[2] ];
+  var rl=Math.sqrt(rd[0]*rd[0]+rd[1]*rd[1]+rd[2]*rd[2])||1;
+  /* generous on purpose — the coarse customModel hotspot (which already
+     gated whether we get here at all) allows looking at a big model from
+     farther away than a tool's usual reach, scaled by its own radius */
+  return { ro:ro, rd:[rd[0]/rl,rd[1]/rl,rd[2]/rl], maxDist:8/scale };
+}
+/* Amanatides & Woo fast voxel traversal: walk the ray cell by cell instead
+   of testing distance to every solid cube */
+function raycastVoxels(cells, cellSize, ro, rd, maxDist){
+  var ix=Math.floor(ro[0]/cellSize), iy=Math.floor(ro[1]/cellSize), iz=Math.floor(ro[2]/cellSize);
+  if(cells[ix+','+iy+','+iz]) return {cx:ix,cy:iy,cz:iz};
+  var stepX=rd[0]>0?1:-1, stepY=rd[1]>0?1:-1, stepZ=rd[2]>0?1:-1;
+  function bound(i,step){ return step>0 ? (i+1)*cellSize : i*cellSize; }
+  var tMaxX=rd[0]!==0 ? (bound(ix,stepX)-ro[0])/rd[0] : Infinity;
+  var tMaxY=rd[1]!==0 ? (bound(iy,stepY)-ro[1])/rd[1] : Infinity;
+  var tMaxZ=rd[2]!==0 ? (bound(iz,stepZ)-ro[2])/rd[2] : Infinity;
+  var tDeltaX=rd[0]!==0 ? Math.abs(cellSize/rd[0]) : Infinity;
+  var tDeltaY=rd[1]!==0 ? Math.abs(cellSize/rd[1]) : Infinity;
+  var tDeltaZ=rd[2]!==0 ? Math.abs(cellSize/rd[2]) : Infinity;
+  var t=0, guard=0;
+  while(t<maxDist && guard++<256){
+    if(tMaxX<tMaxY && tMaxX<tMaxZ){ ix+=stepX; t=tMaxX; tMaxX+=tDeltaX; }
+    else if(tMaxY<tMaxZ){ iy+=stepY; t=tMaxY; tMaxY+=tDeltaY; }
+    else { iz+=stepZ; t=tMaxZ; tMaxZ+=tDeltaZ; }
+    if(cells[ix+','+iy+','+iz]) return {cx:ix,cy:iy,cz:iz};
+  }
+  return null;
+}
+function removeVoxelCell(m,cx,cy,cz){
+  var key=cx+','+cy+','+cz;
+  if(!m.voxelCells[key]) return false;
+  delete m.voxelCells[key];
+  return true;
+}
+function destroyVoxelModel(m){
+  var idx=CUSTOM_MODELS.indexOf(m);
+  if(idx>=0){ CUSTOM_MODELS.splice(idx,1); toast('Nothing left of it.'); }
+}
+function voxelChipFX(wp, col){
+  for(var i=0;i<5;i++) FX.push({ x:wp[0]+rnd(-0.05,0.05), y:wp[1]+rnd(-0.05,0.05), z:wp[2]+rnd(-0.05,0.05),
+    vx:rnd(-0.6,0.6), vz:rnd(-0.6,0.6), vy:rnd(0.6,1.6), t:0, life:rnd(0.3,0.55), r:0.03+rnd(0,0.02), col:col });
+}
+function knockVoxel(m, voxel, radius, chaosAmt){
+  var removed=removeVoxelCell(m, voxel.cx, voxel.cy, voxel.cz), wp=voxelWorldPos(m, voxel);
+  if(removed) voxelChipFX(wp, m.col);
+  if(radius>1){
+    var nbrs=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+    for(var i=0;i<nbrs.length;i++){
+      var nx=voxel.cx+nbrs[i][0], ny=voxel.cy+nbrs[i][1], nz=voxel.cz+nbrs[i][2];
+      if(removeVoxelCell(m,nx,ny,nz)){ removed=true; voxelChipFX(voxelWorldPos(m,{cx:nx,cy:ny,cz:nz}), m.col); }
+    }
+  }
+  if(!removed) return;
+  remeshVoxels(m);
+  addChaos(chaosAmt);
+  toast(radius>1 ? pick(['Blasted a chunk out of it.','That left a hole.','Cubes everywhere.'])
+                  : pick(['Knocked a block loose.','One cube down.','Chipped it right off.']));
+  if(!Object.keys(m.voxelCells).length) destroyVoxelModel(m);
+}
+/* full 26-neighbourhood, not just the 6 face-adjacent cells — voxelizeMesh
+   only samples the SURFACE, so it's a thin shell rather than a solid block,
+   and two neighbouring surface samples often only share an edge or a corner
+   rather than a face. Face-only spread died out almost immediately on
+   anything but a flat wall. */
+function voxelNeighborsInto(cells, cx, cy, cz, seen, frontier){
+  for(var ddx=-1;ddx<=1;ddx++) for(var ddy=-1;ddy<=1;ddy++) for(var ddz=-1;ddz<=1;ddz++){
+    if(!ddx&&!ddy&&!ddz) continue;
+    var nk=(cx+ddx)+','+(cy+ddy)+','+(cz+ddz);
+    if(cells[nk] && !seen[nk]){ seen[nk]=true; frontier.push(nk); }
+  }
+}
+function igniteVoxels(m, voxel){
+  var key=voxel.cx+','+voxel.cy+','+voxel.cz;
+  m.onFire=true; m.fireTimer=0; m.extinguishT=0;
+  m.fireSeen={}; m.fireSeen[key]=true; m.fireFrontier=[key];
+  /* seed with the whole neighbourhood too, not just the one aimed cell — a
+     lone starting cell can dead-end immediately if it happens to sit at a
+     sparse tip of the shell */
+  voxelNeighborsInto(m.voxelCells, voxel.cx, voxel.cy, voxel.cz, m.fireSeen, m.fireFrontier);
+  toast('It catches fast.'); addChaos(3);
+}
+function updateVoxelFire(dt){
+  for(var mi=0;mi<CUSTOM_MODELS.length;mi++){
+    var m=CUSTOM_MODELS[mi]; if(!m.onFire) continue;
+    m.fireTimer-=dt; if(m.fireTimer>0) continue;
+    m.fireTimer=0.16;
+    var burns=Math.min(3, m.fireFrontier.length);
+    for(var b=0;b<burns;b++){
+      var key=m.fireFrontier.shift(); if(!key || !m.voxelCells[key]) continue;
+      delete m.voxelCells[key];
+      var p=key.split(','), cx=+p[0], cy=+p[1], cz=+p[2];
+      var wp=voxelWorldPos(m,{cx:cx,cy:cy,cz:cz});
+      for(var f=0;f<3;f++) FX.push({ x:wp[0]+rnd(-0.06,0.06), y:wp[1]+rnd(0,0.1), z:wp[2]+rnd(-0.06,0.06),
+        vy:rnd(0.5,1.1), t:0, life:rnd(0.35,0.6), r:0.05+rnd(0,0.03), col:[255,90+((rnd(0,80))|0),40] });
+      voxelNeighborsInto(m.voxelCells, cx, cy, cz, m.fireSeen, m.fireFrontier);
+    }
+    remeshVoxels(m);
+    if(!Object.keys(m.voxelCells).length){ CUSTOM_MODELS.splice(mi,1); mi--; toast('Burned to nothing.'); }
+    else if(!m.fireFrontier.length){ m.onFire=false; toast('The fire burns itself out.'); }
+  }
 }
 function importModelAt(tris, x, z, yaw, col, rig){
   var m={ tris:tris, x:x, y:0, z:z, yaw:yaw, scale:1, col:col };
@@ -5241,6 +5401,7 @@ function frame(now){
     maybeSheriff(dt);
     sheriffBtnHot = !!sheriffCase;
     if(chaosScore>0) chaosScore=Math.max(0,chaosScore-dt*0.6);
+    updateVoxelFire(dt);
     poopTimer-=dt; if(poopTimer<=0){ spawnPoopPile(); poopTimer=rnd(18,30); }
     gullTimer-=dt; if(gullTimer<=0){ spawnGull(); gullTimer=rnd(20,35); }
     if(jingleOn){
