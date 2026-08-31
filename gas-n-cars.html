@@ -962,17 +962,19 @@ function newCar(){
     dirt: Math.random()<0.45 ? rnd(0.45,1) : 0,
     startDirt: 0,
     broken: null, brokenFixed:false,
-    parts: { mirrorL:true, mirrorR:true, wheel:true, plate:true, bumper:true },
+    parts: { mirrorL:true, mirrorR:true, wheel:true, plate:true, bumper:true, battery:true },
     glass: 1, painted:false, soaked:0, onFire:0, burned:0,
     tipped:0, served:false, mood:1, angry:0, fugitive:false,
     seed:(Math.random()*1e6)|0, bob:Math.random()*TAU, wheelSpin:0,
     temper: Math.random(), armed: Math.random()<0.18, atkCd: rnd(1.4,3.0), dazeT:0,
     plate: String.fromCharCode(65+(Math.random()*26|0), 65+(Math.random()*26|0)) +
-           '-' + (100+(Math.random()*899|0))
+           '-' + (100+(Math.random()*899|0)),
+    hoodOpen:false
   };
   c.wantGal = Math.round(clamp(c.cap - c.tank, 4, 16) * 10) / 10;
   c.startDirt = c.dirt;
   if(Math.random()<0.35){ c.broken = pick(['mirrorL','mirrorR','plate','bumper']); c.parts[c.broken]=false; }
+  if(Math.random()<0.3){ c.wantOil=true; c.oilLevel=rnd(0.05,0.35); } else { c.wantOil=false; c.oilLevel=1; }
   /* a station running hot enough draws a stranger class of customer */
   if(chaosScore>35 && Math.random()<0.30){
     var w = pick(WEIRD_CUSTOMERS);
@@ -1025,6 +1027,11 @@ function drawCar(c){
   carHullDraw(B,o, dirty, low, arch);
   drawPoopMarks(c,B,o);
   if(c.parts.bumper) drawBox(B,o, 0,0.44,-2.09, 0.80,0.09,0.10, chrome, null);
+  if(c.hoodOpen){
+    drawBox(B,o, 0,1.05,-1.7, 0.55,0.20,0.35, [40,40,44], null);
+    if(c.parts.battery) drawBox(B,o, 0.25,1.15,-1.7, 0.14,0.12,0.14, [40,90,60], null);
+    drawBox(B,o, -0.25,1.15,-1.7, 0.03,0.15,0.03, [214,170,40], null);
+  }
 
   /* ── greenhouse: pillars, roof and inset glass ──────────────────────── */
   var G=CAR_CAB, cabpts=[], CABREF=[0,1.34,0];
@@ -1482,6 +1489,11 @@ function carHotspots(c, out){
   p=P(0,1.34,-1.13);     out.push({ car:c, kind:'glass',  x:p[0],y:p[1],z:p[2], r:0.55 });
   p=P(-0.70,0.40,1.31);  out.push({ car:c, kind:'wheel',  x:p[0],y:p[1],z:p[2], r:0.42 });
   p=P(0,0.44,-2.09);     out.push({ car:c, kind:'bumper', x:p[0],y:p[1],z:p[2], r:0.4 });
+  p=P(0,1.05,-1.7);      out.push({ car:c, kind:'hood',   x:p[0],y:p[1],z:p[2], r:0.5 });
+  if(c.hoodOpen){
+    p=P(-0.25,1.15,-1.7); out.push({ car:c, kind:'dipstick', x:p[0],y:p[1],z:p[2], r:0.3 });
+    p=P( 0.25,1.15,-1.7); out.push({ car:c, kind:'battery',  x:p[0],y:p[1],z:p[2], r:0.3 });
+  }
   if(!c.custState){
     p=P(-0.28,1.45,-1.05); out.push({ car:c, kind:'driver', x:p[0],y:p[1],z:p[2], r:0.6 });
     if(c.hat && c.hat.c){
@@ -1506,6 +1518,7 @@ function allHotspots(){
   out.push({ kind:'jingleBox', x:INT.x+ROOM_HX-0.5, y:0.9, z:INT.z+1.0, r:0.45 });
   out.push({ kind:'basementDoor', x:INT.x+ROOM_HX-1.9, y:1.2, z:INT.z+ROOM_HZ-0.6, r:0.6 });
   out.push({ kind:'register', x:REGISTER.x, y:1.1, z:REGISTER.z, r:0.7 });
+  out.push({ kind:'oilCan', x:OIL_STAND.x, y:0.8, z:OIL_STAND.z, r:0.5 });
   if(buyerHere) out.push({ kind:'buyer', x:BUYER_SPOT.x, y:1.3, z:BUYER_SPOT.z, r:0.6 });
   for(i=0;i<CARS.length;i++) if(CARS[i].state==='waiting') carHotspots(CARS[i], out);
   for(i=0;i<PUMPS.length;i++){
@@ -1561,6 +1574,7 @@ function actionFor(h){
     if(front.stallT>0) return { t:'"Just... loading."' };
     return { t:'Take the payment' };
   }
+  if(h.kind==='oilCan') return heldOil ? null : { t:'Grab a quart of oil' };
   if(h.kind==='candyShelf') return { t:'Rearrange every shelf', bad:true };
   if(h.kind==='hotdogRoller') return { t:'Sneeze in the roller', bad:true };
   if(h.kind==='slushee') return { t:'Crank it past the red line', bad:true };
@@ -1590,6 +1604,8 @@ function actionFor(h){
     return { t:'“'+driverLine(c)+'”' };
   }
   if(h.kind==='hat') return { t:'Snatch '+c.hatName };
+  if(h.kind==='hood') return { t: c.hoodOpen ? 'Shut the hood' : 'Pop the hood' };
+  if(h.kind==='dipstick') return heldOil ? { t:'Hold to pour it in', hold:true } : { t:'Pull the dipstick' };
   if(h.kind==='panelL'||h.kind==='panelR'||h.kind==='front'||h.kind==='glass'){
     if(tool==='fireext' && c.onFire>0) return { t:'Hold to put the fire out', hold:true };
     if(tool==='sponge' && c.dirt>0.02) return { t:'Hold to scrub', hold:true };
@@ -1602,7 +1618,7 @@ function actionFor(h){
     if(tool==='lighter' && c.soaked>0.2) return { t:'Light it', bad:true };
     return null;
   }
-  if(h.kind==='mirrorL'||h.kind==='mirrorR'||h.kind==='plate'||h.kind==='wheel'||h.kind==='bumper'){
+  if(h.kind==='mirrorL'||h.kind==='mirrorR'||h.kind==='plate'||h.kind==='wheel'||h.kind==='bumper'||h.kind==='battery'){
     var on=c.parts[h.kind];
     if(tool==='wrench') return on ? { t:'Unbolt the '+partName(h.kind), bad:true }
                                   : { t:'Fit a new '+partName(h.kind) };
@@ -1612,7 +1628,7 @@ function actionFor(h){
   }
   return null;
 }
-function partName(k){ return k==='plate'?'plate':k==='wheel'?'wheel':k==='bumper'?'bumper':'mirror'; }
+function partName(k){ return k==='plate'?'plate':k==='wheel'?'wheel':k==='bumper'?'bumper':k==='battery'?'battery':'mirror'; }
 function driverLine(c){
   if(c.impatient) return 'Any day now, friend.';
   if(c.onFire>0) return 'MY CAR IS ON FIRE';
@@ -1621,6 +1637,7 @@ function driverLine(c){
   bits.push(c.wantGal.toFixed(1)+' of '+GRADES[c.wantGrade].name.toLowerCase()+', please');
   if(c.startDirt>0.4) bits.push('and a wash if you have a minute');
   if(c.broken) bits.push('and the '+partName(c.broken)+' fell off somewhere near Yuma');
+  if(c.wantOil) bits.push('and could you check the oil');
   return bits.join(', ');
 }
 /* ── using the tool ──────────────────────────────────────────────────────── */
@@ -1657,15 +1674,18 @@ function pressUse(){
   if(h.kind==='manager'){ managerSample(); return; }
   if(h.kind==='ledger'){ openBasementUpgrades(); return; }
   if(h.kind==='buyer'){ sellToBuyer(); return; }
+  if(h.kind==='oilCan'){ pickUpOil(); return; }
   var c=h.car;
   if(h.kind==='cap' && !heldNozzle){ c.capOpen=!c.capOpen; return; }
   if(h.kind==='hat'){ removeHat(c); return; }
+  if(h.kind==='hood'){ toggleHood(c); return; }
+  if(h.kind==='dipstick' && !heldOil){ checkDipstick(c); return; }
   if(h.kind==='driver' && tool==='gun'){ shootDriver(c); return; }
   if(h.kind==='driver' && tool==='crowbar'){ bashDriver(c); return; }
   if(heldNozzle && (h.kind==='panelL'||h.kind==='panelR')){ nozzleWhip(c,h); return; }
   if(tool==='wrench' && h.kind==='glass' && c.glass>0.5){ breakGlass(c); return; }
   if(tool==='lighter' && c.soaked>0.2 && c.onFire<=0){ ignite(c); return; }
-  if((h.kind==='mirrorL'||h.kind==='mirrorR'||h.kind==='plate'||h.kind==='wheel'||h.kind==='bumper')){
+  if((h.kind==='mirrorL'||h.kind==='mirrorR'||h.kind==='plate'||h.kind==='wheel'||h.kind==='bumper'||h.kind==='battery')){
     if(tool==='wrench'){
       if(c.parts[h.kind]) stealPart(c,h.kind);
       else fitPart(c,h.kind);
@@ -1684,6 +1704,7 @@ function holdUse(dt){
   if(tool==='fireext' && c.onFire>0){ extinguish(c,dt); return; }
   if(heldNozzle && (h.kind!=='cap')){ sprayFuel(c,h,dt); return; }
   if(heldPoop && (h.kind==='panelL'||h.kind==='panelR'||h.kind==='front')){ smearPoop(c,h,dt); return; }
+  if(heldOil && h.kind==='dipstick'){ pourOil(c,dt); return; }
   if(tool==='sponge' && c.dirt>0){ scrub(c,dt); return; }
   if(tool==='spray'){ sprayPaint(c,h,dt); return; }
 }
@@ -1758,7 +1779,7 @@ var sprayColour=[224,80,200];
 function stealPart(c,k){
   c.parts[k]=false; c.stolen=(c.stolen||0)+1;
   c.mood=Math.max(0,c.mood-0.45); c.angry=1;
-  var v = k==='plate' ? 45 : (k==='wheel' ? 90 : (k==='bumper' ? 50 : 65));
+  var v = k==='plate' ? 45 : (k==='wheel' ? 90 : (k==='bumper' ? 50 : (k==='battery' ? 70 : 65)));
   partsBin += v; addChaos(k==='wheel' ? 7 : 4);
   toast('Pocketed the '+partName(k)+'  +$'+v+' at the truck'
     + (k==='wheel' ? ' — that car is not going anywhere now' : ''));
@@ -2228,6 +2249,45 @@ function drawBuyer(){
   drawBox(B,o, 0,0.9,0, 0.18,0.5,0.18, [90,70,110], null);
   drawBox(B,o, 0,1.5,0, 0.14,0.14,0.14, [222,180,150], null);
 }
+/* ── the hood: pop it, check the oil, top it off, or just take the battery ── */
+var heldOil=false, oilSupply=0;
+var OIL_STAND={ x:PUMPS[0].x, z:PUMPS[0].z+1.3 };
+var SQUEEGEE_STAND={ x:PUMPS[1].x, z:PUMPS[1].z+1.3 };
+function toggleHood(c){
+  c.hoodOpen=!c.hoodOpen;
+  toast(c.hoodOpen ? 'Hood pops open.' : 'Hood latched back down.');
+}
+function checkDipstick(c){
+  var lvl=c.oilLevel===undefined?1:c.oilLevel;
+  if(lvl>0.7) toast('Oil looks fine.');
+  else if(lvl>0.3) toast(pick(['Getting low.','Could use a top-off.']));
+  else toast('Bone dry. Needs oil.');
+}
+function pickUpOil(){
+  if(heldOil){ toast('Already carrying a can.'); return; }
+  heldOil=true; oilSupply=1;
+  toast('Grabbed a quart of oil.');
+}
+function pourOil(c,dt){
+  if(!heldOil) return;
+  c.oilLevel = Math.min(1, (c.oilLevel===undefined?1:c.oilLevel) + dt*0.5);
+  oilSupply = Math.max(0, oilSupply - dt*0.5);
+  if(c.oilLevel>=1){ heldOil=false; toast('Topped off.'); checkDone(c); }
+  else if(oilSupply<=0){ heldOil=false; toast('Out of oil.'); }
+}
+function drawOilStand(){
+  var B=basis(0,0,0), o=[OIL_STAND.x,0,OIL_STAND.z];
+  drawBox(B,o, 0,0.35,0, 0.22,0.35,0.16, [70,60,50], null);
+  drawBox(B,o, -0.06,0.75,0, 0.05,0.10,0.05, [214,170,40], null);
+  drawBox(B,o, 0.06,0.75,0, 0.05,0.10,0.05, [214,170,40], null);
+  drawBox(B,o, 0,0.86,0, 0.20,0.03,0.14, [60,60,64], null);
+}
+function drawSqueegeeStand(){
+  var B=basis(0,0,0), o=[SQUEEGEE_STAND.x,0,SQUEEGEE_STAND.z];
+  drawBox(B,o, 0,0.30,0, 0.16,0.30,0.16, [70,90,120], null);
+  drawBox(B,o, 0,0.75,0.02, 0.03,0.45,0.02, [200,204,210], null);
+  drawBox(B,o, 0,1.15,0, 0.14,0.03,0.06, [90,170,230], null);
+}
 function drawPoop(){
   for(var i=0;i<POOP_PILES.length;i++){
     var pl=POOP_PILES[i], B=basis(pl.seed,0,0), o=[pl.x,0,pl.z];
@@ -2375,6 +2435,7 @@ function orderTasks(c){
            done: c.pumped!==undefined && Math.abs(c.pumped-c.wantGal)<=1.0 && c.pumpedGrade===c.wantGrade });
   if(c.startDirt>0.4) t.push({ k:'wash', label:'Wash the bodywork', done:c.dirt<=0.05 });
   if(c.broken) t.push({ k:'fix', label:'Fit a new '+partName(c.broken), done:c.parts[c.broken] });
+  if(c.wantOil) t.push({ k:'oil', label:'Check and top off the oil', done:(c.oilLevel!==undefined?c.oilLevel:1)>=0.85 });
   return t;
 }
 function checkDone(c){
@@ -4492,6 +4553,8 @@ function render(){
     drawStation();
     drawTruck();
     drawPoop();
+    drawOilStand();
+    drawSqueegeeStand();
     drawRestroomSign();
     drawGull();
     drawBuyer();
