@@ -909,7 +909,7 @@ function drawStation(){
   stnPumps(B0);
   stnFaceCanopy = DLn-n0;               /* the pre-existing canopy and pumps   */
   n0=DLn;
-  stnBuilding(B0);
+  if(!drawSlot('station', SHOP.x, SHOP.z, 0, 5.5, 0, 1.6)) stnBuilding(B0);
   stnProps(B0);
   stnFaceStation = DLn-n0;              /* the building + the forecourt props  */
 }
@@ -1025,7 +1025,7 @@ function drawCar(c){
   }
 
   /* ── body shell ─────────────────────────────────────────────────────── */
-  carHullDraw(B,o, dirty, low, arch);
+  if(!drawSlot('car', c.x, c.z, c.yaw, 1.4, 0, 0.7)) carHullDraw(B,o, dirty, low, arch);
   drawPoopMarks(c,B,o);
   if(c.parts.bumper) drawBox(B,o, 0,0.44,-2.09, 0.80,0.09,0.10, chrome, null);
   if(c.hoodOpen){
@@ -1174,7 +1174,10 @@ function drawCar(c){
   }
 
   /* the driver, sitting up in the cabin — empty once they have stepped out to pay */
-  if(!c.gone && c.state!=='leaving' && !c.custState) drawDriver(c,B,o);
+  if(!c.gone && c.state!=='leaving' && !c.custState){
+    var seatP=ptOf(B,o,-0.28,0,-1.05);
+    if(!drawSlot('driver', seatP[0], seatP[2], c.yaw, 1.0, 1.1, 0.35)) drawDriver(c,B,o);
+  }
   clearAO();
   /* dirt speckles */
   if(c.dirt>0.05 && d<22){
@@ -1983,6 +1986,7 @@ function duelGull(){
 function drawGull(){
   if(!GULL.active) return;
   var hop=Math.max(0,Math.sin(gTime*3+GULL.seed))*0.05;
+  if(drawSlot('gull', GULL.x, GULL.z, GULL.seed, 1.0, 0.12+hop, 0.3)) return;
   var B=basis(GULL.seed,0,0), o=[GULL.x,0.12+hop,GULL.z];
   meshBlobB(B,o, 0,0,0, 0.11,0.09,0.16,(GULL.seed*1000)|0,[240,240,238],0.7,0.10);   /* body */
   meshBlobB(B,o, 0,0.05,-0.15, 0.07,0.06,0.07,(GULL.seed*1000+3)|0,[236,236,232],0.7,0.10); /* head */
@@ -2246,6 +2250,7 @@ function drawBasementRoom(){
 }
 function drawBuyer(){
   if(!buyerHere) return;
+  if(drawSlot('buyer', BUYER_SPOT.x, BUYER_SPOT.z, 0, 1.0, 0, 0.5)) return;
   var B=basis(0,0,0), o=[BUYER_SPOT.x,0,BUYER_SPOT.z];
   drawBox(B,o, 0,0.9,0, 0.18,0.5,0.18, [90,70,110], null);
   drawBox(B,o, 0,1.5,0, 0.14,0.14,0.14, [222,180,150], null);
@@ -2324,21 +2329,68 @@ function normalizeOBJ(tris){
   }
   return tris;
 }
-function drawCustomModel(m){
-  var B=basis(m.yaw,0,0), o=[m.x,0,m.z], v=[];
-  for(var i=0;i<m.tris.length;i++){
-    var t=m.tris[i];
-    v.length=0;
+/* shared low-level draw: a triangle soup, one flat colour, positioned/scaled/
+   rotated on demand — everything below (loose drops and wired slots alike)
+   goes through this one path */
+function drawModelTris(tris, col, x, y, z, yaw, scale, refY){
+  var B=basis(yaw||0,0,0), o=[x,y||0,z], v=[];
+  for(var i=0;i<tris.length;i++){
+    var t=tris[i]; v.length=0;
     for(var k=0;k<9;k+=3){
-      var p=ptOf(B,o, t[k]*m.scale, t[k+1]*m.scale, t[k+2]*m.scale);
+      var p=ptOf(B,o, t[k]*scale, t[k+1]*scale, t[k+2]*scale);
       v.push(p[0],p[1],p[2]);
     }
-    emitFaceC(v, m.col, m.x, m.y+0.6*m.scale, m.z);
+    emitFaceC(v, col, x, y+(refY!==undefined?refY:0.6*scale), z);
   }
+}
+function drawCustomModel(m){
+  drawModelTris(m.tris, m.col, m.x, m.y, m.z, m.yaw, m.scale);
 }
 function importModelAt(tris, x, z, yaw){
   CUSTOM_MODELS.push({ tris:tris, x:x, y:0, z:z, yaw:yaw, scale:1,
     col:pick([[196,150,90],[150,170,190],[180,90,80],[110,150,110],[170,150,200]]) });
+}
+/* ── wired slots: an imported model standing in for a specific existing
+   thing everywhere that thing is drawn, instead of a one-off dropped prop.
+   Each slot's draw call site checks drawSlot() first and only falls back
+   to its normal procedural look when nothing has been wired in. ────────── */
+var CUSTOM_SLOTS={};
+var SLOT_DEFS=[
+  { key:'station', label:'The gas station building' },
+  { key:'car',     label:'Every customer car' },
+  { key:'driver',  label:'Every driver' },
+  { key:'gull',    label:'The seagull' },
+  { key:'buyer',   label:'The basement buyer' }
+];
+function drawSlot(key, x, z, yaw, scale, y, refY){
+  var m=CUSTOM_SLOTS[key]; if(!m) return false;
+  drawModelTris(m.tris, m.col, x, y||0, z, yaw||0, scale, refY);
+  return true;
+}
+function chooseModelDestination(tris){
+  var opts=[
+    { t:'Just drop it in the world', d:'Loose prop, right where you are standing.',
+      fn:function(){
+        closeSheet();
+        var dropX=camX+Math.sin(camYaw)*2.4, dropZ=camZ+Math.cos(camYaw)*2.4;
+        importModelAt(tris, dropX, dropZ, camYaw+PI);
+        toast('Model dropped in — '+tris.length+' triangles');
+      } }
+  ];
+  for(var i=0;i<SLOT_DEFS.length;i++){
+    (function(def){
+      opts.push({ t:'Replace: '+def.label, d:'Every place the game draws this uses your model instead.',
+        fn:function(){
+          closeSheet();
+          CUSTOM_SLOTS[def.key]={ tris:tris,
+            col:pick([[196,150,90],[150,170,190],[180,90,80],[110,150,110],[170,150,200]]) };
+          toast(def.label+' now uses your model — '+tris.length+' triangles');
+        } });
+    })(SLOT_DEFS[i]);
+  }
+  opts.push({ rule:true });
+  opts.push({ t:'Never mind', fn:closeSheet });
+  showSheet('Use this model for...', tris.length+' triangles imported', opts);
 }
 (function setupModelImport(){
   var input=document.getElementById('modelFile');
@@ -2350,9 +2402,7 @@ function importModelAt(tris, x, z, yaw){
       try{ tris=normalizeOBJ(parseOBJ(reader.result)); }
       catch(e){ toast('Could not read that .obj'); return; }
       if(!tris.length){ toast('No faces found in that file'); return; }
-      var dropX=camX+Math.sin(camYaw)*2.4, dropZ=camZ+Math.cos(camYaw)*2.4;
-      importModelAt(tris, dropX, dropZ, camYaw+PI);
-      toast('Model dropped in — '+tris.length+' triangles');
+      chooseModelDestination(tris);
     };
     reader.readAsText(file);
     input.value='';
@@ -2582,6 +2632,7 @@ function drawWalkers(){
     var c=CARS[i];
     if(!c.custState) continue;
     var bob=Math.sin(gTime*7+c.seed)*0.03;
+    if(drawSlot('driver', c.walkX, c.walkZ, c.walkYaw||0, 1.0, 0.55+bob, 0.55)) continue;
     var B=basis(c.walkYaw||0,0,0), o=[c.walkX,0,c.walkZ];
     drawBox(B,o, 0,0.55+bob,0, 0.16,0.42,0.12, c.col, null);
     drawBox(B,o, 0,1.10+bob,0, 0.13,0.13,0.13, [230,196,168], null);
