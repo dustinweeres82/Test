@@ -1492,7 +1492,12 @@ function allHotspots(){
       out.push({ pump:i, grade:g, kind:'holster', x:P.x+(g-1)*0.26, y:0.98, z:P.z-0.32, r:0.26 });
   }
   out.push({ kind:'alarm', x:SHOP.x-SHOP.w/2-0.14, y:1.35, z:SHOP.z+2.5, r:0.42 });
+  out.push({ kind:'restroom', x:SHOP.x-SHOP.w/2-0.14, y:1.38, z:SHOP.z-2.5, r:0.4 });
   if(truck.here) out.push({ kind:'truck', x:TRUCKBAY.x-1.6, y:1.3, z:TRUCKBAY.z, r:1.5 });
+  for(i=0;i<POOP_PILES.length;i++){
+    var pl=POOP_PILES[i];
+    out.push({ kind:'poop', pile:pl, x:pl.x, y:0.12, z:pl.z, r:0.5 });
+  }
   bgHotspots(out);
   return out;
 }
@@ -1521,6 +1526,10 @@ function actionFor(h){
   if(h.kind==='holster') return heldNozzle ? { t:'Put the nozzle back' } : { t:'Take the '+GRADES[h.grade].name+' nozzle' };
   if(h.kind==='alarm')   return { t: sheriffCase ? 'Call the sheriff' : 'Nothing to report' };
   if(h.kind==='truck')   return { t:'Browse the delivery truck' };
+  if(h.kind==='poop')    return heldPoop ? null : { t:'Pick it up. Why not.', bad:true };
+  if(h.kind==='restroom') return restroomBroken
+    ? { t:'Take down the "Out of Order" sign' }
+    : { t:'Hang a fake "Out of Order" sign', bad:true };
   var c=h.car; if(!c) return null;
   if(h.kind==='cap'){
     if(heldNozzle) return { t: c.capOpen ? 'Hold to pump fuel' : 'Open the cap first', hold:c.capOpen };
@@ -1544,6 +1553,7 @@ function actionFor(h){
     if(heldNozzle) return (h.kind==='panelL'||h.kind==='panelR')
       ? { t:'Hold to hose it down &middot; tap to whip the hose', hold:true, bad:true }
       : { t:'Hold to hose it down', hold:true, bad:true };
+    if(heldPoop && (h.kind==='panelL'||h.kind==='panelR'||h.kind==='front')) return { t:'Smear it on there', bad:true };
     if(tool==='lighter' && c.soaked>0.2) return { t:'Light it', bad:true };
     return null;
   }
@@ -1585,6 +1595,8 @@ function pressUse(){
   }
   if(h.kind==='alarm'){ callSheriff(); return; }
   if(h.kind==='truck'){ openTruck(); return; }
+  if(h.kind==='poop'){ pickUpPoop(h); return; }
+  if(h.kind==='restroom'){ toggleRestroom(); return; }
   var c=h.car;
   if(h.kind==='cap' && !heldNozzle){ c.capOpen=!c.capOpen; return; }
   if(h.kind==='hat'){ removeHat(c); return; }
@@ -1592,6 +1604,7 @@ function pressUse(){
   if(h.kind==='driver' && tool==='crowbar'){ bashDriver(c); return; }
   if(h.kind==='driver' && c.served && !(c.stallT>0)){ openPayment(c); return; }
   if(heldNozzle && (h.kind==='panelL'||h.kind==='panelR')){ nozzleWhip(c,h); return; }
+  if(heldPoop && (h.kind==='panelL'||h.kind==='panelR'||h.kind==='front')){ smearPoop(c,h); return; }
   if(tool==='wrench' && h.kind==='glass' && c.glass>0.5){ breakGlass(c); return; }
   if(tool==='lighter' && c.soaked>0.2 && c.onFire<=0){ ignite(c); return; }
   if((h.kind==='mirrorL'||h.kind==='mirrorR'||h.kind==='plate')){
@@ -1792,6 +1805,55 @@ function fxSpurt(c){
 var SPILLS=[], FX=[], partsBin=0, partStock=0, chaosScore=0, reviewLog=[];
 /* the chaos meter: every prank feeds it, and it bleeds off on its own between customers */
 function addChaos(n){ chaosScore=clamp(chaosScore+n,0,100); }
+
+/* ── the least dignified prank in the game ───────────────────────────────── */
+var POOP_PILES=[], poopTimer=rnd(10,20), heldPoop=false;
+function spawnPoopPile(){
+  if(POOP_PILES.length>=3) return;
+  for(var tries=0;tries<12;tries++){
+    var x=rnd(-22,22), z=rnd(-30,22);
+    if(blocked(x,z)) continue;
+    POOP_PILES.push({ x:x, z:z, seed:Math.random()*TAU });
+    return;
+  }
+}
+function pickUpPoop(h){
+  var i=POOP_PILES.indexOf(h.pile);
+  if(i>=0) POOP_PILES.splice(i,1);
+  heldPoop=true;
+  toast('Picked it up. This was a bad idea.');
+}
+function smearPoop(c,h){
+  if(!heldPoop) return;
+  heldPoop=false; c.pooped=true;
+  c.mood=Math.max(0,c.mood-0.4); c.angry=Math.max(c.angry,0.4);
+  addChaos(5);
+  for(var i=0;i<5;i++) FX.push({ x:h.x+rnd(-0.15,0.15), y:h.y+rnd(-0.05,0.15), z:h.z+rnd(-0.15,0.15),
+      vy:rnd(0.2,0.5), t:0, life:0.4, r:0.03, col:[74,54,34] });
+  toast(pick(['Smeared right across the door handle.','A little present, right on the panel.',
+              'You will regret that decision. Eventually.']));
+}
+/* ── the fake "Out of Order" sign ─────────────────────────────────────────── */
+var restroomBroken=false;
+function toggleRestroom(){
+  restroomBroken=!restroomBroken;
+  if(restroomBroken){ addChaos(3); toast('Nobody needs to know it still works.'); }
+  else toast('Sign comes back down.');
+}
+function drawRestroomSign(){
+  var B=basis(PI/2,0,0), o=[SHOP.x-SHOP.w/2-0.06,0,SHOP.z-2.5];
+  drawBox(B,o, 0,1.38,0, 0.02,0.16,0.24, [244,240,230], null);
+  var col = restroomBroken ? [214,58,48] : [90,150,90];
+  drawBox(B,o, 0.028,1.38,0, 0.006,0.11,0.17, col, null);
+}
+function drawPoop(){
+  for(var i=0;i<POOP_PILES.length;i++){
+    var pl=POOP_PILES[i], B=basis(pl.seed,0,0), o=[pl.x,0,pl.z];
+    meshBlobB(B,o,0,0.045,0,0.10,0.075,0.10,(pl.seed*1000)|0,[74,54,34],0.55,0.22);
+    meshBlobB(B,o,0.075,0.03,0.05,0.062,0.05,0.062,(pl.seed*1000+7)|0,[64,46,28],0.55,0.22);
+    meshBlobB(B,o,-0.07,0.03,-0.045,0.055,0.045,0.055,(pl.seed*1000+13)|0,[82,62,40],0.55,0.22);
+  }
+}
 function updateFX(dt){
   for(var i=FX.length-1;i>=0;i--){
     var f=FX[i]; f.t+=dt;
@@ -1984,6 +2046,7 @@ function collect(c, opt){
   if(c.soaked>0.3){ stars-=1; notes.push('there is fuel everywhere'); }
   if(c.soakedShoes){ stars-=1; notes.push('splashed gas all over my shoes'); }
   if(c.dinged){ stars-=1; notes.push('dinged my door with the hose'); }
+  if(c.pooped){ stars-=2; notes.push('something unspeakable is smeared on my door'); }
   if(c.burned>0.1){ stars=1; notes.push('SET MY CAR ON FIRE'); }
   if(c.impatient){ stars-=1; notes.push('kept me waiting'); }
   stars=clamp(stars,1,5);
@@ -2779,7 +2842,14 @@ document.addEventListener('mousemove', function(e){
   camYaw += e.movementX*0.0022;
   camPitch = clamp(camPitch - e.movementY*0.0022, -1.2, 1.1);
 });
+var slipT=0, slipCd=0;
 function walk(dt){
+  if(slipCd>0) slipCd-=dt;
+  if(slipT>0){
+    slipT-=dt;
+    camY = 1.50 + Math.sin(gTime*38)*0.035;
+    return;
+  }
   var mx=0, mz=0;
   if(K['KeyW']) mz+=1; if(K['KeyS']) mz-=1;
   if(K['KeyA']) mx-=1; if(K['KeyD']) mx+=1;
@@ -2793,6 +2863,19 @@ function walk(dt){
     if(!blocked(nx2,camZ)) camX=nx2;
     if(!blocked(camX,nz2)) camZ=nz2;
     bobT += dt*9*run;
+    /* running through your own spilled fuel never ends well */
+    if(run>1 && slipCd<=0){
+      for(var i=0;i<SPILLS.length;i++){
+        var sp2=SPILLS[i];
+        if(dist2(camX,camZ,sp2.x,sp2.z)<sp2.r*0.55){
+          slipT=0.9; slipCd=3.5;
+          camKick(0.5,0.055);
+          toast(pick(['Feet go right out from under you.','Down you go. Right in it.',
+                      'That is going to leave a mark.']));
+          break;
+        }
+      }
+    }
     /* the nozzle only reaches so far from its pump */
     if(heldNozzle){
       var P=PUMPS[heldNozzle.pump];
@@ -3931,6 +4014,8 @@ function render(){
   drawShadows();
   drawStation();
   drawTruck();
+  drawPoop();
+  drawRestroomSign();
   for(var i=0;i<CARS.length;i++) drawCar(CARS[i]);
   drawBallGuy();
   drawBallProps();
@@ -3965,6 +4050,7 @@ function frame(now){
     maybeSheriff(dt);
     sheriffBtnHot = !!sheriffCase;
     if(chaosScore>0) chaosScore=Math.max(0,chaosScore-dt*0.6);
+    poopTimer-=dt; if(poopTimer<=0){ spawnPoopPile(); poopTimer=rnd(18,30); }
     clockT+=dt;
     if(clockT>DAY_LEN) endDay();
   }
